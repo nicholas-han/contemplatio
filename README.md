@@ -1,1 +1,1 @@
-# conte-equity-research
+# Contemplatio: Equity Research
