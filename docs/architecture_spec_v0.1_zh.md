@@ -1,0 +1,2373 @@
+# Conte Equity Research v0.1 — 架构与领域规范
+
+**项目：** Contemplatio（Conte）  
+**子系统：** Equity Research  
+**状态：** MVP 实现架构规范  
+**版本：** v0.1  
+**主要运行时：** DeepSeek Harness / Cordis  
+**主要部署模式：** Local-first，单用户 / 小规模多人使用  
+**主要存储模式：** 公司级便携文件夹 + SQLite + 本地文件  
+
+---
+
+## 1. 目的
+
+Conte Equity Research 是一套以 DeepSeek Harness bundle 形式构建的、local-first 的股票投研系统。其核心目的，是在不引入重型前端技术栈、集中式数据库基础设施或企业级部署架构的前提下，以结构化、可复现的方式组织、存储、查询、分析和展示公司级投研数据。
+
+MVP 优先保证：
+
+- 正确的业务逻辑；
+- 以 Company 为中心的投研组织方式；
+- 结构化财务数据与运营数据；
+- point-in-time 的分析师预测；
+- 严格的数据溯源（provenance）；
+- 可复用的行业与业务线模板；
+- 参数化估值与情景分析模型；
+- 通过 Harness tools 向 Agent 提供能力；
+- 一个轻量级本地 Web UI，用于完整展示公司信息与进行模型交互；
+- 所有公司数据具有良好的可迁移性与可检查性。
+
+MVP 明确**不**优先解决：
+
+- 多用户云端部署；
+- PostgreSQL 或分布式存储；
+- 企业级权限体系；
+- 复杂前端工程；
+- 通用化的全行业 ontology；
+- event sourcing / 所有实际数据的完整历史 revision 追踪；
+- 行业模板变更后自动同步既有公司；
+- 跨公司 source 的全局去重；
+- 泛语义化观点、投资 thesis 或市场评论的存储。
+
+---
+
+## 2. 核心设计原则
+
+### 2.1 Company 是投研的原子单位
+
+Equity Research 的主要 aggregate root 是 **Company**，而不是 Security。
+
+一家公司可以拥有多个证券、上市地点、share class 或交易所代码，但所有投研数据统一归属于一个 Company workspace。
+
+示例：
+
+```text
+中国平安（Company）
+├── 601318.SH
+└── 2318.HK
+```
+
+Security-level 信息只是 Company 下属的 metadata，不形成独立 research object。
+
+---
+
+### 2.2 Company workspace 必须完全 self-contained
+
+每家公司都必须能够作为一个独立目录完整迁移。
+
+复制一个公司文件夹后，应保留该公司的：
+
+- manifest；
+- 结构化数据；
+- 分析师预测；
+- source documents；
+- provenance records；
+- 管理层历史；
+- cap table 历史；
+- scenarios；
+- model runs；
+- Web UI 所需展示状态。
+
+未来 Mailroom 子系统可能拥有独立的中央 archive，但 Equity Research 的基本运行不能依赖 Mailroom 的具体架构。
+
+v0.1 允许同一 source document 在不同公司目录下重复保存本地副本。
+
+---
+
+### 2.3 业务 taxonomy 由投资者定义，而不是由公司披露方式定义
+
+Conte **不能**因为年报里出现了某个 segment、子公司、渠道、产品或披露维度，就自动把它升级为公司业务结构。
+
+研究 taxonomy 有意保持狭义，并由用户主动定义：
+
+```text
+Company
+└── Industry
+    └── Business Line
+```
+
+一个 Company 可以属于多个 Industry。  
+一个 Business Line 必须且只能属于一个 Industry。
+
+以下披露维度：
+
+- subsidiary；
+- coal type；
+- mine；
+- geography；
+- product；
+- customer type；
+- channel；
+- legal entity；
+
+都属于**数据维度（data dimensions）**，而不是业务结构对象。
+
+示例：
+
+```text
+兖矿能源
+└── Coal
+    ├── Coal Mining & Sales
+    ├── Coal Chemicals
+    └── Power Generation
+```
+
+`Yancoal Australia`、`Luxi Mining`、`thermal coal`、`coking coal` 不属于 Business Line。它们只在确有价值时作为运营数据维度出现。
+
+---
+
+### 2.4 可复用模板提供统一 vocabulary，而不是强制每家公司填满同一套数据
+
+Industry-level template 的作用，是减少重复配置，并在有限行业覆盖范围内统一 metric vocabulary。
+
+Template **不**要求每家公司都披露其中的全部指标。
+
+因此，一个 template 更适合被理解成 **Metric Pack**：它包含可复用的指标定义，以及可选的 Business Line 定义。
+
+示例：
+
+```text
+Coal Metric Pack
+├── 核心运营指标
+├── 可选运营指标
+├── 行业特定财务指标
+└── 可用业务线定义
+```
+
+一家公司只需要使用其 Metric Pack 中实际有数据、有研究价值的那部分指标。
+
+---
+
+### 2.5 严格 provenance 必须终止于本地保留的 artifact
+
+外部 URL 只属于 acquisition metadata，不视为 durable evidence。
+
+权威 provenance chain 为：
+
+```text
+External World
+    ↓ acquisition
+Source Metadata
+    ↓
+Local Artifact
+    ↓
+Evidence Locator
+    ↓
+Fact / Estimate
+```
+
+如果网页被抓取后，经过人工或 AI 编辑成为本地 Markdown，那么即使不保留原始网页，该本地 Markdown 也可以成为最终 retained artifact。
+
+如果 source 本身是年报 PDF、业绩演示 PDF 或分析师 PDF 研报，则通常应保留原始 PDF。
+
+---
+
+### 2.6 只有在业务价值明确的地方保存历史
+
+v0.1 **不**实现 universal point-in-time state，也不实现 event sourcing。
+
+历史保存策略如下：
+
+| 对象 | 历史保存策略 |
+|---|---|
+| Actual 财务 / 运营事实 | 只保留当前 authoritative value；修订时直接覆盖 |
+| Analyst estimates | 必须保存完整 point-in-time 历史 |
+| 管理层任职 | 必须保存 start/end date |
+| Reporting lines | 必须保存 start/end date |
+| Cap table | 必须按 snapshot 保存历史 |
+| Model runs | 保留历史运行记录 |
+| Template applications | 记录已应用版本；更新必须显式手动执行 |
+| Company manifest | 只保留当前状态 |
+
+---
+
+## 3. DeepSeek Harness Bundle 架构
+
+Conte Equity Research 作为一个 Harness bundle 发布，其中包含四个 Cordis plugins：
+
+```text
+@conte/equity-research
+│
+├── conte-equity-archive
+├── conte-equity-data-engine
+├── conte-equity-model-engine
+└── conte-equity-web-service
+```
+
+v0.1 中，这四个 plugin 可以全部位于同一个 repository、同一个 npm package 内。
+
+它们代表的是 runtime / lifecycle boundary，并不要求形成独立 package boundary。
+
+---
+
+## 4. Plugin 职责
+
+## 4.1 `conte-equity-archive`
+
+### 职责
+
+Company workspace 的 authoritative local persistence layer。
+
+### 负责
+
+- 公司目录发现；
+- company path resolution；
+- `company.json` 读写；
+- `company.sqlite` 连接与 migration；
+- 本地 document storage；
+- artifact hashing；
+- 文件完整性检查；
+- 底层 persistence helpers；
+- archive 初始化；
+- 必要时提供 archive backup / export primitives。
+
+### 不负责
+
+- 财务语义；
+- 煤炭 / 银行 / 保险等行业指标逻辑；
+- valuation calculation；
+- 面向 Agent 的业务 tools；
+- 行业模板的业务解释（除持久化外）。
+
+### 概念 service
+
+```text
+ctx.equityArchive
+```
+
+示例能力：
+
+```ts
+openCompany(companyId)
+createCompany(manifest)
+readManifest(companyId)
+writeManifest(companyId, manifest)
+withDatabase(companyId, fn)
+storeArtifact(companyId, sourcePathOrBytes, metadata)
+resolveArtifact(companyId, artifactId)
+computeArtifactHash(...)
+```
+
+`archive` 在这里指 authoritative persistence layer，不代表 read-only cold storage。
+
+---
+
+## 4.2 `conte-equity-data-engine`
+
+### 职责
+
+公司投研数据的 domain-level data service。
+
+### 依赖
+
+```text
+conte-equity-archive
+```
+
+### 负责
+
+- Company domain objects；
+- corporate structure；
+- 人物及任职历史；
+- 管理汇报关系；
+- company industries；
+- company business lines；
+- Metric Pack application；
+- metric definitions；
+- financial facts；
+- operating facts；
+- analyst estimates；
+- source metadata；
+- source artifact metadata；
+- evidence；
+- provenance validation；
+- import / extraction commit workflows；
+- domain validation；
+- 面向 Agent 的 data tools。
+
+### 不负责
+
+- 原始 filesystem 细节；
+- raw SQLite file lifecycle；
+- valuation formula implementation；
+- HTML rendering。
+
+### 概念 service
+
+```text
+ctx.equityDataEngine
+```
+
+示例能力：
+
+```ts
+getCompany(companyId)
+listCompanies()
+getFinancialFacts(...)
+getOperatingFacts(...)
+getEstimates(...)
+getManagement(...)
+getCapTable(...)
+getSources(...)
+getEvidence(...)
+applyMetricPack(...)
+upsertFact(...)
+appendEstimate(...)
+```
+
+### Harness tools
+
+该 plugin 应直接通过 Harness `ctx.tools` 注册适当的 model-callable tools。
+
+v0.1 不设置独立的 `conte-equity-tools` plugin。
+
+---
+
+## 4.3 `conte-equity-model-engine`
+
+### 职责
+
+参数化估值、情景分析和模型运行。
+
+### 依赖
+
+```text
+conte-equity-data-engine
+conte-equity-archive
+```
+
+Model Engine 必须通过 `equity-data-engine` 获取研究数据，而不是直接执行 raw SQL。
+
+### 负责
+
+- model definitions；
+- valuation calculations；
+- model inputs；
+- scenario definitions；
+- model execution；
+- model run persistence；
+- model outputs；
+- model version metadata；
+- composite / SOTP model orchestration；
+- 面向 Agent 的 model tools。
+
+### 示例
+
+```text
+Generic DCF
+Coal DCF / commodity scenario model
+Bank DDM
+Bank P/B–ROE framework
+Insurance P/EV / NBV framework
+Composite SOTP model
+```
+
+### Model philosophy
+
+Model 采用 **code-defined and parameterized** 的方式。
+
+用户运行模型时不需要写代码。计算结构由代码定义，而输入参数可以通过 Web UI 或 Agent tools 修改。
+
+示例：
+
+```text
+Revenue CAGR       8.0%
+Margin            22.0%
+WACC               9.0%
+Terminal Growth    3.0%
+```
+
+Scenario 是一组具有名称的 input overrides。
+
+Model Run 保存一次执行时实际使用的 input snapshot 和 output snapshot。
+
+### 概念 service
+
+```text
+ctx.equityModelEngine
+```
+
+---
+
+## 4.4 `conte-equity-web-service`
+
+### 职责
+
+本地 HTTP service 和轻量级 Web UI。
+
+### 依赖
+
+```text
+conte-equity-data-engine
+conte-equity-model-engine
+```
+
+### 负责
+
+- local HTTP server lifecycle；
+- Web routes；
+- API routes；
+- static assets；
+- HTML rendering；
+- tables 与 charts；
+- model input forms；
+- scenario editing UI；
+- model execution UI；
+- source / evidence navigation UI。
+
+### 不允许
+
+- 直接读取 `company.sqlite`；
+- 绕开 domain services；
+- 为 Web 路径重新实现一套与 Agent 不同的业务逻辑。
+
+Harness Agent 和 Web UI 必须使用同一套 domain services。
+
+```text
+                 Harness Agent
+                    /      \
+                   v        v
+         equity-data      equity-model
+             engine          engine
+                 ^             ^
+                  \           /
+                   \         /
+                  web-service
+```
+
+MVP Web UI 应刻意保持轻量。
+
+优先使用 simple local HTTP server + server-rendered HTML / minimal JavaScript；除非后续确有需要，否则不采用大型 React / Next.js 架构。
+
+---
+
+## 5. 推荐 Repository 结构
+
+```text
+conte-equity-research/
+│
+├── package.json
+├── README.md
+├── cordis.patch.yml
+│
+├── src/
+│   ├── domain/
+│   │   ├── company.ts
+│   │   ├── corporate.ts
+│   │   ├── industry.ts
+│   │   ├── business-line.ts
+│   │   ├── metric.ts
+│   │   ├── fact.ts
+│   │   ├── estimate.ts
+│   │   ├── source.ts
+│   │   ├── evidence.ts
+│   │   ├── scenario.ts
+│   │   └── model.ts
+│   │
+│   ├── metric-packs/
+│   │   ├── financial-common/
+│   │   ├── coal/
+│   │   ├── bank/
+│   │   └── insurance/
+│   │
+│   ├── models/
+│   │   ├── generic-dcf/
+│   │   ├── coal/
+│   │   ├── bank/
+│   │   ├── insurance/
+│   │   └── composite/
+│   │
+│   ├── plugins/
+│   │   ├── archive.ts
+│   │   ├── data-engine.ts
+│   │   ├── model-engine.ts
+│   │   └── web-service.ts
+│   │
+│   └── web/
+│       ├── templates/
+│       ├── static/
+│       └── routes/
+│
+└── tests/
+```
+
+具体文件布局后续可以调整。真正重要的是 conceptual boundary，而不是目录外观。
+
+---
+
+## 6. Company Workspace 布局
+
+每家公司对应一个完全 self-contained 的文件夹。
+
+示例：
+
+```text
+companies/
+└── yankuang-energy/
+    │
+    ├── company.json
+    ├── company.sqlite
+    │
+    ├── documents/
+    │   ├── filings/
+    │   ├── earnings/
+    │   ├── analyst/
+    │   ├── media/
+    │   ├── curated/
+    │   └── other/
+    │
+    └── exports/
+```
+
+### `company.json`
+
+保存当前 manifest 和相对稳定的 identity / configuration。
+
+### `company.sqlite`
+
+保存 authoritative structured research state。
+
+### `documents/`
+
+保存本地 source artifacts 和 curated materials。
+
+### `exports/`
+
+保存可重新生成、可丢弃的输出，例如导出的报告、表格等。
+
+文件夹位置仅为了方便人工浏览；source type 和 provenance 的 authoritative metadata 存在数据库中。
+
+---
+
+## 7. `company.json` Manifest
+
+Manifest 保存相对稳定的公司级 metadata，以及当前 workspace 配置。
+
+建议初始结构：
+
+```json
+{
+  "schema_version": "0.1",
+  "company_id": "yankuang-energy",
+  "name_zh": "兖矿能源集团股份有限公司",
+  "name_en": "Yankuang Energy Group Company Limited",
+  "website": "https://...",
+  "jurisdiction": "CN",
+  "accounting_standard": "CAS",
+  "primary_industry": "coal",
+  "securities": [
+    {
+      "exchange": "SSE",
+      "ticker": "600188",
+      "security_type": "common_equity"
+    },
+    {
+      "exchange": "HKEX",
+      "ticker": "01171",
+      "security_type": "common_equity"
+    }
+  ]
+}
+```
+
+### 不应放入 `company.json` 的内容
+
+不要将可变、具有历史状态的数据放入 manifest，例如：
+
+- 当前 / 历史董监高；
+- board members；
+- reporting lines；
+- cap table；
+- financial facts；
+- operating facts；
+- analyst estimates；
+- 已应用的 Metric Pack 版本；
+- scenarios；
+- model runs。
+
+`company.json` 是 manifest，不是 database。
+
+---
+
+## 8. 会计准则策略
+
+v0.1 中，每个 Company workspace 只支持**一个 authoritative accounting standard**。
+
+例如：
+
+```text
+CAS
+IFRS
+US-GAAP
+```
+
+当前会计准则保存在 `company.json` 中。
+
+单个 Source 可以在其 metadata 中记录另一个 accounting standard；但如果与 Company 配置的 authoritative standard 冲突，则不能悄悄导入为 authoritative financial facts。
+
+v0.1 不支持同一公司同时维护 CAS / IFRS 两套平行 fact set。
+
+---
+
+## 9. Corporate 与 Management 模型
+
+管理层历史和汇报结构需要显式的 temporal modeling。
+
+### 9.1 `people`
+
+表示独立于某个公司职位的自然人。
+
+建议字段：
+
+```text
+person_id
+name_zh
+name_en
+birth_year        nullable
+biography         nullable
+created_at
+updated_at
+```
+
+---
+
+### 9.2 `organization_units`
+
+在需要展示管理结构时，表示组织单元。
+
+例如：
+
+```text
+Group Management
+Finance
+Investment
+Life & Health
+Board of Directors
+Audit Committee
+```
+
+建议字段：
+
+```text
+organization_unit_id
+parent_unit_id        nullable
+name
+unit_type
+active
+```
+
+对于非常简单的公司，这张表可能实际使用很少，但 schema 中应保留。
+
+---
+
+### 9.3 `positions`
+
+表示相对稳定的组织职位，与当前由谁担任分离。
+
+例如：
+
+```text
+Group CEO
+CFO
+President
+行长
+董事长
+Head of Investment
+```
+
+建议字段：
+
+```text
+position_id
+organization_unit_id     nullable
+role_type                 nullable
+role_title_raw
+position_name_normalized  nullable
+active
+```
+
+`role_title_raw` 保存公司实际使用的原始职位名称。
+
+`role_type` 可提供统一语义分类，例如 `ceo`、`cfo`、`chairman`、`president`，但不能覆盖或丢弃原始 title。
+
+---
+
+### 9.4 `role_assignments`
+
+保存人物担任某个 position 的历史记录。
+
+建议字段：
+
+```text
+assignment_id
+person_id
+position_id
+start_date
+end_date          nullable
+is_current
+source_id         nullable
+evidence_id       nullable
+```
+
+---
+
+### 9.5 `reporting_lines`
+
+管理层汇报关系发生在 **position 与 position 之间**，而不是 person 与 person 之间。
+
+建议字段：
+
+```text
+reporting_line_id
+subordinate_position_id
+manager_position_id
+relationship_type
+start_date
+end_date          nullable
+evidence_id       nullable
+```
+
+初始支持：
+
+```text
+solid
+dotted
+```
+
+如此即使职位持有人发生变化，组织汇报结构本身不必重建。
+
+Board governance 关系不能自动解释为 management reporting relationship。
+
+---
+
+## 10. Industry 与 Business Line Taxonomy
+
+## 10.1 `company_industries`
+
+一家公司可以参与多个行业。
+
+建议字段：
+
+```text
+company_industry_id
+industry_id
+is_primary
+active
+```
+
+例如：
+
+```text
+Ping An
+├── insurance
+├── banking
+└── asset-management
+```
+
+---
+
+## 10.2 Business Lines
+
+Business Line 是由投资者主动定义的、隶属于某个 Industry 的研究分类。
+
+一个 Business Line 必须且只能属于一个 Industry。
+
+示例：
+
+### Coal
+
+```text
+coal.coal_mining_and_sales
+coal.coal_chemicals
+coal.power_generation
+```
+
+### Banking
+
+```text
+bank.retail_banking
+bank.wholesale_banking
+```
+
+### Insurance
+
+```text
+insurance.life_and_health
+insurance.p_and_c
+```
+
+同一个自然语言名称可以在多个行业中出现，但必须使用不同 identifier。
+
+例如：
+
+```text
+coal.power_generation
+hydropower.power_generation
+```
+
+二者不能被视为同一个全局复用 Business Line。
+
+---
+
+## 10.3 `business_lines`
+
+表示某家公司实际启用的 company-level Business Lines。
+
+建议字段：
+
+```text
+business_line_id
+company_industry_id
+business_line_type_id
+display_name
+active
+created_at
+updated_at
+```
+
+系统不得通过解析年报 segment 自动创建 Business Line。
+
+Business Line 必须由用户明确配置。
+
+---
+
+## 11. Metric Packs
+
+Metric Pack 提供可复用 vocabulary 和 Business Line definitions。
+
+建议结构：
+
+```text
+metric-packs/
+├── financial-common/
+│   ├── pack.json
+│   └── metrics.json
+│
+├── coal/
+│   ├── pack.json
+│   ├── business-lines.json
+│   ├── financial-metrics.json
+│   └── operating-metrics.json
+│
+├── bank/
+└── insurance/
+```
+
+### Metric Pack 可定义
+
+- metric IDs；
+- display names；
+- metric categories；
+- units；
+- value types；
+- period behavior；
+- allowed dimensions；
+- preferred display grouping；
+- optional validation rules；
+- available business-line types。
+
+Metric Pack **不是**独立 Cordis plugin。
+
+---
+
+## 12. Template Application 语义
+
+将某个 Metric Pack 应用到公司时，会把相关定义初始化 / copy 到该公司的本地 structured state。
+
+已经存在的公司不会自动继承未来 Metric Pack 的更新。
+
+### `template_applications`
+
+建议字段：
+
+```text
+application_id
+template_type
+metric_pack_id
+metric_pack_version
+company_industry_id    nullable
+applied_at
+```
+
+例如：
+
+```text
+financial-common@0.1 → company-level
+coal@0.3             → coal company_industry
+bank@0.2             → banking company_industry
+```
+
+### 更新策略
+
+当 Metric Pack 从：
+
+```text
+coal@0.3 → coal@0.4
+```
+
+升级时，既有公司保持不变，直到用户显式运行 refresh / apply-update。
+
+未来可以提供 diff 预览，但 v0.1 禁止自动 mutation。
+
+---
+
+## 13. Metric Definition 模型
+
+`metric_definitions` 是系统最核心的表之一。
+
+建议字段：
+
+```text
+metric_id
+namespace
+name
+label_zh          nullable
+label_en          nullable
+category
+value_type
+canonical_unit    nullable
+period_behavior
+aggregation_rule  nullable
+origin_pack_id    nullable
+origin_pack_version nullable
+allowed_dimensions_json
+metadata_json     nullable
+active
+created_at
+updated_at
+```
+
+### 示例：通用财务指标
+
+```text
+metric_id: financial.revenue
+category: financial
+value_type: number
+canonical_unit: CNY
+period_behavior: duration
+origin_pack_id: financial-common
+```
+
+### 示例：煤炭运营指标
+
+```text
+metric_id: coal.production
+category: operating
+canonical_unit: tonne
+period_behavior: duration
+origin_pack_id: coal
+allowed_dimensions:
+  - subsidiary
+  - coal_type
+  - mine
+```
+
+### 示例：银行指标
+
+```text
+metric_id: bank.nim
+category: financial
+canonical_unit: percent
+period_behavior: duration
+origin_pack_id: bank
+```
+
+Metric vocabulary 可复用；但不要求不同公司拥有完全一致的披露覆盖率。
+
+---
+
+## 14. Financial 与 Operating Facts
+
+Conte 使用统一的 Fact container，同时通过 `metric_definitions.category` 区分语义类别。
+
+v0.1 不要求财务数据与运营数据使用不同 SQLite table，除非实现时拆表明显更简单。
+
+### `facts`
+
+建议字段：
+
+```text
+fact_id
+metric_id
+company_industry_id     nullable
+business_line_id        nullable
+
+period_type
+period_start            nullable
+period_end
+
+value_number            nullable
+value_text              nullable
+value_boolean           nullable
+unit                     nullable
+
+source_reported_at      nullable
+observed_at              nullable
+
+dimensions_json         nullable
+
+ingestion_method
+verification_status
+
+created_at
+updated_at
+```
+
+根据 metric 的 `value_type`，只能有一个 value column 被实际使用。
+
+---
+
+## 15. Period Semantics
+
+不要仅使用 `2025Q3` 这种可能存在歧义的 label 作为时间表达。
+
+所有 Fact 应使用明确的 period semantics。
+
+### `period_type = duration`
+
+例如：
+
+```text
+Revenue FY2025
+period_start = 2025-01-01
+period_end   = 2025-12-31
+```
+
+### `period_type = instant`
+
+例如：
+
+```text
+Total Assets at 2025-12-31
+period_end = 2025-12-31
+```
+
+季度、半年、九个月、全年等 label 可以作为派生展示字段，但不能替代明确日期。
+
+---
+
+## 16. Financial Facts 与 Operating Dimensions
+
+### 16.1 Financial facts
+
+财务事实通常应存在于：
+
+- company consolidated level；或
+- 用户明确认为经济上有意义的 Business Line level。
+
+系统不应鼓励随意根据以下维度拆财务数据：
+
+- subsidiary；
+- product；
+- mine；
+- coal type；
+- geography；
+- channel；
+
+除非用户明确判断这种拆分具有经济含义。
+
+这样可以避免仅因为公司某张披露表同时给出收入 / 成本，就人为构造出错误的 pseudo-P&L。
+
+---
+
+### 16.2 Operating facts
+
+运营数据可以更自由地使用披露维度。
+
+示例：
+
+```text
+metric = coal.production
+industry = coal
+business_line = coal.coal_mining_and_sales
+
+dimensions = {
+  "subsidiary": "yancoal_australia",
+  "coal_type": "thermal"
+}
+```
+
+运营维度不会创建新的 Business Line。
+
+---
+
+## 17. Dimension 策略
+
+Dimensions 可以是异构的，但 vocabulary 必须受控。
+
+例如：
+
+```text
+subsidiary
+coal_type
+mine
+geography
+product_type
+customer_type
+channel
+currency
+```
+
+v0.1 可以直接使用 JSON 保存：
+
+```json
+{
+  "coal_type": "thermal",
+  "subsidiary": "yancoal_australia"
+}
+```
+
+但每个 Metric Definition 应声明允许使用的 dimension keys，以防止同一个概念在不同地方被写成：
+
+```text
+channel
+sales_channel
+distribution_channel
+channel_type
+```
+
+系统不要求同行业不同公司的 dimension coverage 完全一致。
+
+---
+
+## 18. Actual Fact Revision 策略
+
+v0.1 对实际财务 / 运营数据只保留**当前 authoritative value**。
+
+如果历史数据被 restate 或 correction：
+
+```text
+old value → overwrite with current authoritative value
+```
+
+同时将 provenance 更新为新的 authoritative source / evidence。
+
+v0.1 不需要：
+
+```text
+revision_of_fact_id
+event sourcing
+historical actual-fact chain
+```
+
+可以保留普通的 `created_at` / `updated_at` 作为 housekeeping 信息。
+
+---
+
+## 19. Analyst Estimates
+
+Analyst estimates 必须明确支持 point-in-time 历史。
+
+### 核心语义维度
+
+```text
+预测的是哪个 metric？
+对应哪个 target period？
+由谁 / 哪个 provider 提供？
+在什么时间点已知？
+来自哪条 evidence？
+```
+
+### `estimates`
+
+建议字段：
+
+```text
+estimate_id
+metric_id
+company_industry_id    nullable
+business_line_id       nullable
+
+target_period_type
+target_period_start    nullable
+target_period_end
+
+as_of
+published_at           nullable
+observed_at            nullable
+
+provider
+analyst                 nullable
+estimate_type
+
+value_number            nullable
+value_text              nullable
+unit                    nullable
+
+dimensions_json         nullable
+
+ingestion_method
+verification_status
+
+created_at
+```
+
+不能因为出现新的预测就覆盖旧的 estimate history。
+
+示例：
+
+```text
+CMB FY2027E Net Profit
+2026-06-30 → 182B
+2026-07-31 → 186B
+2026-08-27 → 191B
+```
+
+全部都必须可查询。
+
+---
+
+## 20. Estimate Ingestion Boundary
+
+v0.1 中 Equity Research 不应直接依赖 Mailroom。
+
+应使用内部 importer / provider abstraction。
+
+概念接口：
+
+```ts
+interface EstimateProvider {
+  getEstimates(companyId, query): Promise<EstimateInput[]>
+}
+```
+
+可能的 provider：
+
+```text
+Manual Importer
+CSV Importer
+Free API Provider
+Future Mailroom Provider
+```
+
+未来 Mailroom 可以实现该接口，而不需要重新设计 Equity Research。
+
+---
+
+## 21. Cap Table 模型
+
+统一采用 `captable_*` 命名。
+
+### `share_classes`
+
+建议字段：
+
+```text
+share_class_id
+name
+security_type
+exchange          nullable
+ticker            nullable
+currency          nullable
+voting_rights_metadata nullable
+active
+```
+
+### `captable_snapshots`
+
+```text
+captable_snapshot_id
+as_of_date
+source_id         nullable
+evidence_id       nullable
+created_at
+```
+
+### `captable_class_totals`
+
+```text
+captable_snapshot_id
+share_class_id
+shares_outstanding
+percentage_of_total_equity nullable
+```
+
+### `captable_positions`
+
+```text
+captable_position_id
+captable_snapshot_id
+holder_name
+holder_id          nullable
+share_class_id
+shares             nullable
+ownership_pct      nullable
+rank               nullable
+```
+
+Cap table 采用 snapshot-based history，并长期保留。
+
+---
+
+## 22. Source 与 Provenance 架构
+
+## 22.1 核心 provenance chain
+
+```text
+Source
+  ↓
+Source Artifact
+  ↓
+Evidence
+  ↓
+Fact / Estimate
+```
+
+External URL 只是 non-authoritative acquisition metadata。
+
+---
+
+## 22.2 `sources`
+
+表示一份信息来源的 logical object。
+
+建议字段：
+
+```text
+source_id
+source_type
+title
+publisher
+author            nullable
+published_at      nullable
+accessed_at       nullable
+original_url      nullable
+accounting_standard nullable
+upstream_source_id nullable
+notes             nullable
+created_at
+```
+
+可选 `source_type`：
+
+```text
+filing
+earnings
+company_release
+analyst_report
+media
+api
+manual
+other
+```
+
+---
+
+## 22.3 `source_artifacts`
+
+表示 Conte 本地实际保留下来的 material。
+
+建议字段：
+
+```text
+artifact_id
+source_id
+artifact_kind
+media_type
+local_path
+sha256
+original_retained
+transformation_method nullable
+created_at
+```
+
+可能的 `artifact_kind`：
+
+```text
+original
+curated
+extracted
+transformed
+```
+
+可能的 `transformation_method`：
+
+```text
+manual_edit
+ai_assisted_manual_edit
+html_to_markdown
+ocr
+parser
+other
+```
+
+SHA-256 必须针对 retained local artifact 本身计算。
+
+---
+
+## 22.4 Webpage 保留策略
+
+如果网页被抓取后整理成 curated local Markdown，则保留原始 HTML 是可选的。
+
+示例：
+
+```text
+Source:
+  title = high-quality article
+  original_url = https://...
+
+Artifact:
+  artifact_kind = curated
+  local_path = documents/curated/article.md
+  original_retained = false
+  transformation_method = ai_assisted_manual_edit
+```
+
+Evidence 直接指向本地 Markdown artifact。
+
+以后原始 URL 即使 404，也不会破坏 provenance。
+
+---
+
+## 22.5 PDF 保留策略
+
+对于 filings、业绩演示、分析师报告等 PDF，在实际可行时应保留 PDF 本地副本。
+
+示例：
+
+```text
+Source
+  ↓
+Artifact: documents/filings/2025-annual-report.pdf
+  sha256 = ...
+```
+
+---
+
+## 22.6 `evidence`
+
+Evidence 指明某条 structured observation 在 artifact 中的具体证据位置。
+
+建议字段：
+
+```text
+evidence_id
+artifact_id
+locator_type
+locator_json
+excerpt_text      nullable
+notes             nullable
+created_at
+```
+
+示例：
+
+### PDF
+
+```json
+{
+  "page": 73,
+  "section": "Operating Review",
+  "table": "Production and Sales",
+  "row": "Raw coal production"
+}
+```
+
+### Markdown
+
+```json
+{
+  "heading": "FY2025 Outlook",
+  "line_start": 42,
+  "line_end": 49
+}
+```
+
+### Spreadsheet
+
+```json
+{
+  "sheet": "Forecast",
+  "cell_range": "F12:H12"
+}
+```
+
+### API
+
+```json
+{
+  "endpoint": "/estimates",
+  "request": {"ticker": "..."},
+  "json_path": "$.data[0].eps"
+}
+```
+
+---
+
+## 22.7 Fact / Estimate 与 Evidence 的关系
+
+采用 many-to-many mapping。
+
+```text
+facts
+  ↕
+fact_evidence
+  ↕
+evidence
+```
+
+以及：
+
+```text
+estimates
+  ↕
+estimate_evidence
+  ↕
+evidence
+```
+
+一条 Fact 可以由多条 Evidence 支撑。  
+一条 Evidence 也可以同时支撑多条 Fact。
+
+---
+
+## 23. Ingestion 与 Verification Metadata
+
+每条导入的 structured observation 都应该记录它如何进入 Conte。
+
+推荐 `ingestion_method`：
+
+```text
+manual
+manual_verified
+api
+csv_import
+parser
+llm_extracted
+llm_assisted_manual
+```
+
+推荐 `verification_status`：
+
+```text
+unverified
+machine_checked
+human_verified
+```
+
+v0.1 不采用看似精确但实际价值有限的 confidence score。
+
+---
+
+## 24. Source 保存与 Structured Extraction 工作流
+
+Document retention 与 structured extraction 是两个独立状态。
+
+推荐流程：
+
+```text
+Receive source material
+    ↓
+Archive local artifact
+    ↓
+Create Source + SourceArtifact
+    ↓
+Extract candidate facts / estimates
+    ↓
+Create Evidence
+    ↓
+Validate
+    ↓
+Commit structured observations
+```
+
+一份文档已被 archive，不代表其中所有有价值的数据已经完成结构化提取。
+
+---
+
+## 25. Models、Scenarios 与 Model Runs
+
+## 25.1 `ModelDefinition`
+
+一个 code-defined model 应定义：
+
+- model ID；
+- model version；
+- 支持的 company / industry context；
+- input schema；
+- calculation logic；
+- output schema；
+- optional child / component models。
+
+---
+
+## 25.2 Scenario
+
+Scenario 是一组命名后的 parameter overrides。
+
+示例：
+
+```text
+Base
+coal_price = 700
+production = 100
+
+Bull
+coal_price = 850
+production = 105
+
+Bear
+coal_price = 550
+production = 95
+```
+
+### `scenarios`
+
+建议字段：
+
+```text
+scenario_id
+name
+model_id
+company_industry_id    nullable
+business_line_id       nullable
+parameters_json
+created_at
+updated_at
+```
+
+---
+
+## 25.3 Model Run
+
+Model Run 是一次历史执行 snapshot。
+
+建议字段：
+
+```text
+model_run_id
+model_id
+model_version
+scenario_id            nullable
+run_at
+inputs_json
+outputs_json
+notes                   nullable
+```
+
+v0.1 优先使用 JSON snapshot，不要过早把每一个 model input/output 全部拆成独立 relational table。
+
+---
+
+## 25.4 Composite Models
+
+Model Engine 在概念上必须允许一个公司估值由多个业务模型组件组合。
+
+示例：
+
+```text
+Ping An SOTP
+├── Life & Health valuation
+├── P&C valuation
+├── Bank valuation
+├── Asset Management valuation
+└── HoldCo adjustments
+```
+
+第一版不要求实现复杂、通用的 CompositeModel framework。只要架构允许一个 model 调用多个 component calculation 并聚合结果即可。
+
+---
+
+## 26. Web UI MVP
+
+Web UI 是 MVP 的必需功能。
+
+推荐 route：
+
+```text
+/company/:company_id
+```
+
+推荐 Company 页面结构：
+
+```text
+Overview
+Corporate / Management
+Cap Table
+Financials
+Operating Metrics
+Analyst Estimates
+Valuation / Scenarios
+Sources
+```
+
+### 关键 UI 能力
+
+- 以表格查看 financial / operating facts；
+- 对选定 metric 绘制历史 chart；
+- 按 available dimensions 筛选运营数据；
+- 按 `as_of` 浏览 analyst estimate history；
+- 编辑 scenario / model input parameters；
+- 执行 model runs；
+- 查看 model outputs；
+- 查看重要 Fact 对应的 source / evidence；
+- 打开本地 retained artifact；
+- 在有数据时展示 management / reporting structure。
+
+Web UI 必须调用 domain services，不允许直接访问 SQLite。
+
+---
+
+## 27. 初始行业定义
+
+v0.1 首批支持三个行业。
+
+## 27.1 Coal
+
+初始目标公司：
+
+```text
+Yankuang Energy
+China Shenhua（后续同行扩展）
+```
+
+初始 Business Line vocabulary：
+
+```text
+coal.coal_mining_and_sales
+coal.coal_chemicals
+coal.power_generation
+```
+
+建议核心运营指标：
+
+```text
+coal.production
+coal.sales_volume
+coal.asp
+coal.unit_cost
+coal.reserve
+```
+
+可选 dimensions：
+
+```text
+subsidiary
+coal_type
+mine
+geography
+```
+
+不要自动把物流、设备制造或其他次要披露 segment 建成 Business Line。
+
+---
+
+## 27.2 Banking
+
+初始目标公司：
+
+```text
+China Merchants Bank
+ICBC
+```
+
+初始 Business Line vocabulary 可以包括：
+
+```text
+bank.retail_banking
+bank.wholesale_banking
+```
+
+但必须由用户配置，不能从每张披露表自动推断。
+
+建议核心指标：
+
+```text
+bank.net_interest_income
+bank.net_fee_income
+bank.loan_balance
+bank.deposit_balance
+bank.nim
+bank.npl_ratio
+bank.provision_coverage
+bank.cet1_ratio
+bank.roe
+```
+
+可选 dimensions：
+
+```text
+customer_type
+loan_type
+industry
+geography
+product_type
+```
+
+---
+
+## 27.3 Insurance
+
+初始目标公司：
+
+```text
+Ping An Insurance
+China Life
+```
+
+初始 Business Line vocabulary：
+
+```text
+insurance.life_and_health
+insurance.p_and_c
+```
+
+对于集团型公司，可同时存在其他 Industry：
+
+```text
+banking
+asset-management
+securities
+```
+
+建议保险指标：
+
+```text
+insurance.premium
+insurance.insurance_service_revenue
+insurance.nbv
+insurance.nbv_margin
+insurance.embedded_value
+insurance.csm
+insurance.investment_yield
+insurance.solvency_ratio
+```
+
+可选 dimensions：
+
+```text
+channel
+product_type
+customer_segment
+```
+
+---
+
+## 28. Worked Schema Example — 兖矿能源
+
+### Company taxonomy
+
+```text
+Yankuang Energy
+└── Coal
+    ├── Coal Mining & Sales
+    ├── Coal Chemicals
+    └── Power Generation
+```
+
+### Financial fact
+
+```text
+metric_id = financial.revenue
+business_line_id = null
+period_type = duration
+period_start = 2025-01-01
+period_end = 2025-12-31
+value = ...
+unit = CNY
+```
+
+### Business-line financial fact
+
+```text
+metric_id = financial.revenue
+business_line_id = coal.coal_mining_and_sales
+period_type = duration
+...
+```
+
+只有当这种拆分在经济意义上成立，并且是用户主动配置时才保存。
+
+### 按子公司拆的运营事实
+
+```text
+metric_id = coal.production
+business_line_id = coal.coal_mining_and_sales
+value = ...
+unit = tonne
+
+dimensions = {
+  "subsidiary": "yancoal_australia"
+}
+```
+
+### 按煤种拆的运营事实
+
+```text
+metric_id = coal.sales_volume
+business_line_id = coal.coal_mining_and_sales
+
+dimensions = {
+  "coal_type": "thermal"
+}
+```
+
+子公司或煤种都不会因此创建新的 Business Line。
+
+---
+
+## 29. Worked Schema Example — 招商银行
+
+### Company taxonomy
+
+```text
+China Merchants Bank
+└── Banking
+    ├── Retail Banking
+    └── Wholesale Banking
+```
+
+是否实际启用这两个 Business Line，由用户显式配置。
+
+### 核心 Facts
+
+```text
+bank.loan_balance
+bank.deposit_balance
+bank.nim
+bank.npl_ratio
+bank.provision_coverage
+```
+
+### Operating dimension 示例
+
+```text
+metric_id = bank.loan_balance
+business_line_id = bank.retail_banking
+
+dimensions = {
+  "loan_type": "mortgage"
+}
+```
+
+### Point-in-time estimate
+
+```text
+metric_id = financial.net_profit
+as_of = 2026-08-27
+target_period_end = 2027-12-31
+provider = ...
+value = ...
+```
+
+---
+
+## 30. Worked Schema Example — 中国平安
+
+### Company taxonomy
+
+```text
+Ping An
+│
+├── Insurance
+│   ├── Life & Health
+│   └── P&C
+│
+├── Banking
+│   └── Banking
+│
+└── Asset Management
+    └── Asset Management
+```
+
+这是 Company level 的真实 cross-industry composition。
+
+### Insurance operating fact
+
+```text
+metric_id = insurance.nbv
+business_line_id = insurance.life_and_health
+
+dimensions = {
+  "channel": "bancassurance"
+}
+```
+
+### Composite model
+
+```text
+Ping An SOTP
+├── Life & Health model
+├── P&C model
+├── Bank model
+├── Asset Management model
+└── HoldCo adjustment
+```
+
+---
+
+## 31. Agent Tool 设计原则
+
+不要向 Agent 暴露低层存储操作。
+
+### Bad
+
+```text
+execute_sql
+write_database_row
+open_sqlite_file
+```
+
+### Good
+
+```text
+get_company
+get_financials
+get_operating_metrics
+get_estimates
+get_management
+get_captable
+get_sources
+get_evidence
+run_model
+save_scenario
+```
+
+Agent tools 必须调用 `equity-data-engine` 或 `equity-model-engine` 的 domain methods。
+
+---
+
+## 32. Mailroom Boundary
+
+Mailroom 与 Equity Research 保持独立 subsystem。
+
+概念边界：
+
+```text
+Mailroom
+  ↓
+trustworthy / retained source material
+  ↓
+Source + Artifact + Evidence contract
+=============================== boundary
+Equity Research
+  ↓
+Fact / Estimate / Structured Research Data
+```
+
+v0.1 中 Equity Research 可以不依赖 Mailroom，直接 ingest source materials。
+
+未来 Mailroom integration 应通过狭义 provider / importer interfaces 接入，而不是直接内部耦合。
+
+---
+
+## 33. v0.1 明确 Non-goals
+
+除非出现 blocking use case，否则不要实现以下内容：
+
+- PostgreSQL；
+- cloud deployment；
+- multi-tenant database；
+- user accounts / permissions；
+- React / Next.js-heavy frontend architecture；
+- event sourcing；
+- actual facts 的历史 revision chains；
+- 同一家公司同时维护多种会计准则；
+- universal cross-industry business-line ontology；
+- 自动把所有 disclosure segments 解释为 Business Line；
+- automatic template upgrades；
+- 公司之间的 global source deduplication；
+- semantic investment thesis / opinion database；
+- 完整 portfolio / position management；
+- enterprise search infrastructure；
+- distributed task queues；
+- generalized data warehouse dimensional modeling。
+
+---
+
+## 34. 推荐 MVP 实现顺序
+
+### Phase 1 — Archive 与 Company bootstrap
+
+实现：
+
+```text
+conte-equity-archive
+company.json
+company.sqlite initialization
+company directory layout
+schema migrations
+artifact storage + sha256
+```
+
+成功标准：
+
+一个 company workspace 可以被创建、打开、复制，并可以由人直接检查其中内容。
+
+---
+
+### Phase 2 — Data Engine core
+
+实现：
+
+```text
+Company metadata
+people / positions / assignments / reporting lines
+company industries
+business lines
+Metric Packs
+metric definitions
+facts
+sources / artifacts / evidence
+```
+
+成功标准：
+
+可以用一小组人工录入数据完整表达兖矿能源，并具有完整 provenance。
+
+---
+
+### Phase 3 — 初始行业 Metric Packs
+
+实现最小版本：
+
+```text
+financial-common
+coal
+bank
+insurance
+```
+
+成功标准：
+
+兖矿能源、招商银行、中国平安都可以在同一 generic schema 下共存，而不需要为每个行业建立独立 database tables。
+
+---
+
+### Phase 4 — Estimates
+
+实现：
+
+```text
+point-in-time estimate schema
+manual / CSV importer
+optional free API provider
+estimate provenance
+```
+
+成功标准：
+
+同一 target-period estimate 可以保留多个不同 `as_of` 日期，并能够按历史查询。
+
+---
+
+### Phase 5 — Model Engine
+
+优先针对真实 research context 各实现一个简单模型，不要先构建通用 modeling framework。
+
+建议第一批：
+
+```text
+Coal scenario / valuation model
+Bank DDM or P/B–ROE model
+Insurance P/EV or simplified SOTP component
+```
+
+成功标准：
+
+Model parameters 可修改、可运行，并保存可复现的 input/output snapshot。
+
+---
+
+### Phase 6 — Web Service
+
+实现本地 Company 页面。
+
+成功标准：
+
+用户能在本地打开某公司页面并查看：
+
+- overview；
+- management；
+- financials；
+- operating data；
+- analyst estimates；
+- valuation / scenarios；
+- provenance / source links。
+
+---
+
+### Phase 7 — Harness tools
+
+向 Harness Agent 暴露 Data Engine 和 Model Engine 的高层能力。
+
+成功标准：
+
+以下类型问题可以通过 Agent tools 完成：
+
+```text
+Show Yankuang Energy's last 8 quarters of coal production.
+Show CMB FY2027 net profit estimates as of each month-end.
+Run the Ping An base scenario with a lower NBV growth assumption.
+Show the source supporting this metric.
+```
+
+---
+
+## 35. 给 Codex 的实现 Guardrails
+
+1. **优先使用简单、明确的代码，而不是为了抽象而抽象。**
+2. **除非确有必要，不要把四个 Cordis plugins 拆成四个 repository 或 npm package。**
+3. **除非明确需要，不要引入 generic ORM。** `conte-equity-archive` 内直接使用 SQLite 是允许的。
+4. **不要让 Web 或 Agent code 执行 raw SQL。**
+5. **不要从 filings 自动推断 Business Lines。**
+6. **不要创建 industry-specific fact tables。** 行业差异应该体现在 Metric Packs 和 metric definitions 中。
+7. **不要让所有对象都 point-in-time。** 严格遵守本文定义的 history policy。
+8. **不要把 external URLs 当作 durable provenance。** Evidence 必须终止于 retained local artifact。
+9. **网页原始 HTML 没有实际价值时不必保存。** Curated local Markdown 可以成为 authoritative retained artifact。
+10. **对于 PDF source，在实际可行时应保留原始 PDF。**
+11. **Metric Pack 更新时，不得自动修改既有公司。**
+12. **Company folder 必须保持 self-contained 与 portable。**
+13. **对于 evidence locator、dimensions、scenario parameters、model snapshots 等异构信息，可以有选择地使用 JSON fields。**
+14. **当 JSON 明显更适合 MVP 时，不要过早 relational normalization。**
+15. **从第一天开始使用 migrations 管理 `company.sqlite` schema changes。**
+16. **优先为 domain invariants 增加 tests，再做 frontend polish。**
+
+---
+
+## 36. Core Invariants
+
+在实际可行的地方，应在代码中强制以下 invariants。
+
+### Company
+
+- `company_id` 在一个 workspace 内保持稳定；
+- v0.1 中每个 company workspace 只有一个 authoritative accounting standard。
+
+### Business taxonomy
+
+- 一个 Company 可以属于多个 Industry；
+- 一个 Business Line 只能属于一个 company Industry；
+- Business Line 绝不能由 disclosure dimension 自动创建。
+
+### Metrics
+
+- 每条 Fact / Estimate 必须引用一个已知 Metric Definition；
+- 开启 validation 时，Fact / Estimate 使用的 dimensions 应属于 Metric Definition 允许的维度。
+
+### Actual facts
+
+- 系统只保存 current authoritative actual value；
+- correction / restatement 直接覆盖旧值，不创建 revision chain。
+
+### Estimates
+
+- 对 `as_of` 历史而言，estimates 是 append-only；
+- 新 estimate 不得删除旧 point-in-time observation。
+
+### Provenance
+
+- externally sourced 的重要 Fact / Estimate 应关联 Evidence；
+- Evidence 必须引用本地 Artifact；
+- 每个本地 Artifact 应拥有 SHA-256 hash；
+- `original_url` 不能单独作为充分 evidence。
+
+### Templates
+
+- 应用 Metric Pack 时必须记录其版本；
+- pack upgrade 绝不能自动修改既有 Company。
+
+### UI 与 Agent
+
+- Web UI 与 Agent tools 必须使用相同 domain services；
+- 二者都不得绕过 Data Engine / Model Engine 直接查询 SQLite。
+
+---
+
+## 37. 架构总结
+
+v0.1 系统可以总结为：
+
+```text
+                         DeepSeek Harness
+                               │
+                    Conte Equity Research Bundle
+                               │
+          ┌────────────────────┼────────────────────┐
+          │                    │                    │
+          ▼                    ▼                    ▼
+conte-equity-data-engine  conte-equity-model-engine  conte-equity-web-service
+          │                    │                    │
+          └──────────────┬─────┴──────────────┬─────┘
+                         ▼                    │
+                conte-equity-archive ◄───────┘
+                         │
+                         ▼
+                 Company Workspaces
+                         │
+           ┌─────────────┼─────────────┐
+           ▼             ▼             ▼
+      company.json   company.sqlite  documents/
+```
+
+Domain model：
+
+```text
+Company
+│
+├── Corporate / Management
+│   ├── People
+│   ├── Positions
+│   ├── Role Assignments
+│   ├── Reporting Lines
+│   └── Cap Table Snapshots
+│
+├── Industry
+│   └── Business Line
+│
+├── Metric Definitions
+│   ├── Financial Facts
+│   ├── Operating Facts
+│   └── Analyst Estimates
+│
+├── Sources
+│   └── Local Artifacts
+│       └── Evidence
+│           └── Facts / Estimates
+│
+└── Models
+    ├── Scenarios
+    └── Model Runs
+```
+
+总原则：
+
+> **Company 是 workspace boundary。Industry 与 Business Line 是投资者主动定义的 research taxonomy。Metric Packs 提供可复用 vocabulary。Facts 与 estimates 使用通用 structured observation 容器。披露层面的细节保留在 operating dimensions 中。Provenance 必须终止于本地 retained artifact。Models 消费的 structured data 与 Agent 和 Web UI 使用的数据完全一致。**
+
+---
+
+## 38. 推荐给 Codex 的第一个任务
+
+**不要**第一次就要求 Codex 一次性实现整个 specification。
+
+第一轮 implementation task 应严格限制为：
+
+1. repository skeleton；
+2. Cordis bundle / plugin registration；
+3. `conte-equity-archive`；
+4. company-folder initialization；
+5. `company.json` schema；
+6. `company.sqlite` migration framework；
+7. Company、Metric Definition、Fact、Source、Artifact、Evidence 所需的最小 tables；
+8. 一个最小 `financial-common` Metric Pack；
+9. 一个最小 `coal` Metric Pack；
+10. 手工 seed 一个最小的兖矿能源 workspace；
+11. 基础 tests，用于验证 portability 与 provenance。
+
+只有这一阶段稳定工作后，再依次增加：
+
+- Estimates；
+- Models；
+- Management graph；
+- Cap Table；
+- Web UI。

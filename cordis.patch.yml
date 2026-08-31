@@ -1,0 +1,9 @@
+plugins:
+  conte-equity-archive:
+    apply: ./dist/src/plugins/archive.js
+  conte-equity-data-engine:
+    apply: ./dist/src/plugins/data-engine.js
+  conte-equity-model-engine:
+    apply: ./dist/src/plugins/model-engine.js
+  conte-equity-web-service:
+    apply: ./dist/src/plugins/web-service.js
