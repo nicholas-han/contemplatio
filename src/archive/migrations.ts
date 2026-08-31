@@ -384,6 +384,14 @@ export const migrations: readonly Migration[] = [
         ON captable_snapshots(company_id, as_of_date);
     `,
   },
+  {
+    version: 9,
+    name: 'reporting_line_natural_keys',
+    sql: `
+      CREATE UNIQUE INDEX reporting_lines_natural_key_idx
+        ON reporting_lines(company_id, subordinate_position_id, manager_position_id, start_date, ifnull(end_date, ''), relationship_type);
+    `,
+  },
 ]
 
 export function migrateDatabase(database: DatabaseSync): void {

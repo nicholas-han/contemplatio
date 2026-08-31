@@ -24,6 +24,8 @@ export interface FactInput {
 export interface FactRecord {
   factId: string
   metricId: string
+  companyIndustryId: string | null
+  businessLineId: string | null
   periodType: 'duration' | 'instant'
   periodStart: string | null
   periodEnd: string
@@ -93,6 +95,7 @@ export interface FactFilter {
   category?: 'financial' | 'operating'
   periodStartFrom?: string
   periodEndTo?: string
+  dimensions?: Record<string, string>
   limit?: number
 }
 
@@ -178,6 +181,9 @@ export class EquityDataEngine {
       const now = new Date().toISOString()
       database.exec('BEGIN IMMEDIATE')
       try {
+        const existing = database.prepare(`SELECT application_id FROM template_applications
+          WHERE metric_pack_id = ? AND metric_pack_version = ? AND company_industry_id IS ?`).get(pack.id, pack.version, companyIndustryId ?? null) as { application_id: string } | undefined
+        if (existing) { database.exec('COMMIT'); return existing.application_id }
         applyMetricPackToDatabase(database, pack, { transaction: false })
         database.prepare(`INSERT INTO template_applications (
           application_id, template_type, metric_pack_id, metric_pack_version, company_industry_id, applied_at
@@ -198,9 +204,14 @@ export class EquityDataEngine {
       if (filter.category) { clauses.push('m.category = ?'); parameters.push(filter.category) }
       if (filter.periodStartFrom) { clauses.push('(f.period_start >= ? OR (f.period_start IS NULL AND f.period_end >= ?))'); parameters.push(filter.periodStartFrom, filter.periodStartFrom) }
       if (filter.periodEndTo) { clauses.push('f.period_end <= ?'); parameters.push(filter.periodEndTo) }
+      for (const [key, value] of Object.entries(filter.dimensions ?? {})) {
+        if (!/^[A-Za-z0-9_]+$/.test(key)) throw new Error(`Invalid dimension key: ${key}`)
+        clauses.push('json_extract(f.dimensions_json, ?) = ?')
+        parameters.push(`$.${key}`, value)
+      }
       const limit = boundedLimit(filter.limit)
       parameters.push(limit)
-      const rows = database.prepare(`SELECT f.fact_id, f.metric_id, f.period_type, f.period_start, f.period_end,
+      const rows = database.prepare(`SELECT f.fact_id, f.metric_id, f.company_industry_id, f.business_line_id, f.period_type, f.period_start, f.period_end,
           f.value_number, f.value_text, f.value_boolean, f.unit, f.dimensions_json, f.verification_status
         FROM facts f JOIN metric_definitions m ON m.metric_id = f.metric_id WHERE ${clauses.join(' AND ')} ORDER BY f.period_end, f.fact_id LIMIT ?`).all(...parameters) as Array<Record<string, unknown>>
       return rows.map(toFactRecord)
@@ -209,7 +220,7 @@ export class EquityDataEngine {
 
   getFact(companyId: string, factId: string): FactRecord {
     return this.archive.withDatabase(companyId, (database) => {
-      const row = database.prepare(`SELECT fact_id, metric_id, period_type, period_start, period_end,
+      const row = database.prepare(`SELECT fact_id, metric_id, company_industry_id, business_line_id, period_type, period_start, period_end,
           value_number, value_text, value_boolean, unit, dimensions_json, verification_status
         FROM facts WHERE fact_id = ?`).get(factId) as Record<string, unknown> | undefined
       if (!row) throw new Error(`Unknown fact: ${factId}`)
@@ -410,7 +421,7 @@ export class EquityDataEngine {
     })
   }
 
-  addReportingLine(companyId: string, input: { subordinatePositionId: string; managerPositionId: string; relationshipType: 'solid' | 'dotted'; startDate: string; endDate?: string; evidenceId?: string }): string {
+  addReportingLine(companyId: string, input: { subordinatePositionId: string; managerPositionId: string; relationshipType: 'solid' | 'dotted'; startDate: string; endDate?: string | undefined; evidenceId?: string | undefined }): string {
     validateDate(input.startDate, 'startDate'); if (input.endDate) validateDate(input.endDate, 'endDate')
     if (input.subordinatePositionId === input.managerPositionId) throw new Error('A position cannot report to itself')
     return this.archive.withDatabase(companyId, (database) => {
@@ -581,6 +592,17 @@ export class EquityDataEngine {
       return businessLineId
     })
   }
+
+  listTaxonomy(companyId: string): Array<{ companyIndustryId: string; industryId: string; isPrimary: boolean; businessLines: Array<{ businessLineId: string; businessLineTypeId: string; displayName: string }> }> {
+    return this.archive.withDatabase(companyId, (database) => {
+      const industries = database.prepare('SELECT company_industry_id, industry_id, is_primary FROM company_industries WHERE company_id = ? AND active = 1 ORDER BY is_primary DESC, industry_id').all(companyId) as Array<Record<string, unknown>>
+      const lines = database.prepare('SELECT business_line_id, company_industry_id, business_line_type_id, display_name FROM business_lines WHERE active = 1 ORDER BY display_name, business_line_id').all() as Array<Record<string, unknown>>
+      return industries.map((industry) => ({
+        companyIndustryId: String(industry.company_industry_id), industryId: String(industry.industry_id), isPrimary: Boolean(industry.is_primary),
+        businessLines: lines.filter((line) => line.company_industry_id === industry.company_industry_id).map((line) => ({ businessLineId: String(line.business_line_id), businessLineTypeId: String(line.business_line_type_id), displayName: String(line.display_name) })),
+      }))
+    })
+  }
 }
 
 function valueColumnsFor(valueType: 'number' | 'text' | 'boolean', value: number | string | boolean): {
@@ -641,7 +663,8 @@ function toFactRecord(row: Record<string, unknown>): FactRecord {
   else if (row.value_text !== null && row.value_text !== undefined) value = String(row.value_text)
   else value = Boolean(row.value_boolean)
   return {
-    factId: String(row.fact_id), metricId: String(row.metric_id), periodType: row.period_type as FactRecord['periodType'],
+    factId: String(row.fact_id), metricId: String(row.metric_id), companyIndustryId: row.company_industry_id ? String(row.company_industry_id) : null,
+    businessLineId: row.business_line_id ? String(row.business_line_id) : null, periodType: row.period_type as FactRecord['periodType'],
     periodStart: row.period_start ? String(row.period_start) : null, periodEnd: String(row.period_end), value,
     unit: row.unit ? String(row.unit) : null, dimensions, verificationStatus: String(row.verification_status),
   }

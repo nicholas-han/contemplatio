@@ -7,47 +7,72 @@ export interface ManagementCsvRow {
   nameZh?: string | undefined; nameEn?: string | undefined; birthYear?: number | undefined; biography?: string | undefined
   unitName?: string | undefined; unitType?: string | undefined; roleTitleRaw: string; roleType?: string | undefined; positionNameNormalized?: string | undefined
   startDate: string; endDate?: string | undefined; isCurrent: boolean; sourceId?: string | undefined; evidenceId?: string | undefined
+  managerRoleTitleRaw?: string | undefined; managerRoleType?: string | undefined; managerUnitName?: string | undefined; managerUnitType?: string | undefined
+  reportingRelationshipType?: 'solid' | 'dotted' | undefined; reportingStartDate?: string | undefined; reportingEndDate?: string | undefined
 }
 
-export async function importManagementCsv(filePath: string, archive: EquityArchive, companyId: string, apply = false): Promise<{ filePath: string; rows: number; imported: number; assignmentIds: string[] }> {
+export async function importManagementCsv(filePath: string, archive: EquityArchive, companyId: string, apply = false): Promise<{ filePath: string; rows: number; imported: number; assignmentIds: string[]; reportingLineIds: string[] }> {
   const rows = parseManagementCsv(await readFile(resolve(filePath), 'utf8'))
-  const assignmentIds = apply ? importManagementRows(rows, archive, companyId) : []
-  return { filePath: resolve(filePath), rows: rows.length, imported: assignmentIds.length, assignmentIds }
+  const result = apply ? importManagementRows(rows, archive, companyId) : { assignmentIds: [], reportingLineIds: [] }
+  return { filePath: resolve(filePath), rows: rows.length, imported: result.assignmentIds.length, ...result }
 }
 
-export function importManagementCsvText(csv: string, archive: EquityArchive, companyId: string, apply = false): { rows: number; imported: number; assignmentIds: string[] } {
-  const rows = parseManagementCsv(csv); const assignmentIds = apply ? importManagementRows(rows, archive, companyId) : []
-  return { rows: rows.length, imported: assignmentIds.length, assignmentIds }
+export function importManagementCsvText(csv: string, archive: EquityArchive, companyId: string, apply = false): { rows: number; imported: number; assignmentIds: string[]; reportingLineIds: string[] } {
+  const rows = parseManagementCsv(csv); const result = apply ? importManagementRows(rows, archive, companyId) : { assignmentIds: [], reportingLineIds: [] }
+  return { rows: rows.length, imported: result.assignmentIds.length, ...result }
 }
 
-function importManagementRows(rows: ManagementCsvRow[], archive: EquityArchive, companyId: string): string[] {
+function importManagementRows(rows: ManagementCsvRow[], archive: EquityArchive, companyId: string): { assignmentIds: string[]; reportingLineIds: string[] } {
   const engine = new EquityDataEngine(archive)
-  const people = new Map<string, string>(), units = new Map<string, string>(), positions = new Map<string, string>(), existingAssignments = new Map<string, string>()
+  const people = new Map<string, string>(), units = new Map<string, string>(), positions = new Map<string, string>(), existingAssignments = new Map<string, string>(), existingReportingLines = new Map<string, string>()
   for (const person of engine.listPeople(companyId)) {
     for (const key of personAliases(person.nameZh, person.nameEn)) people.set(key, person.personId)
     for (const assignment of person.assignments) existingAssignments.set(`${person.personId}|${assignment.positionId}|${assignment.startDate}|${assignment.endDate ?? ''}`, assignment.assignmentId)
   }
   for (const unit of engine.listOrganizationUnits(companyId)) units.set(normalize(unit.name), unit.organizationUnitId)
   for (const position of engine.listPositions(companyId)) positions.set(`${normalize(position.roleTitleRaw)}|${normalize(position.roleType)}|${position.organizationUnitId ?? ''}`, position.positionId)
-  const assignments: string[] = []
+  for (const line of engine.listReportingLines(companyId)) existingReportingLines.set(`${line.subordinatePositionId}|${line.managerPositionId}|${line.startDate}|${line.endDate ?? ''}|${line.relationshipType}`, line.reportingLineId)
+  const assignmentIds: string[] = [], reportingLineIds: string[] = []
   for (const row of rows) {
     const personKeys = personAliases(row.nameZh, row.nameEn)
     let personId = personKeys.map((key) => people.get(key)).find((id): id is string => Boolean(id))
     if (!personId) { personId = engine.createPerson(companyId, { nameZh: row.nameZh, nameEn: row.nameEn, birthYear: row.birthYear, biography: row.biography }); for (const key of personKeys) people.set(key, personId) }
-    let unitId: string | undefined
-    if (row.unitName) { const unitKey = normalize(row.unitName); unitId = units.get(unitKey); if (!unitId) { unitId = engine.createOrganizationUnit(companyId, { name: row.unitName, unitType: row.unitType ?? 'department' }); units.set(unitKey, unitId) } }
-    const positionKey = `${normalize(row.roleTitleRaw)}|${normalize(row.roleType)}|${unitId ?? ''}`
-    let positionId = positions.get(positionKey)
-    if (!positionId) { positionId = engine.createPosition(companyId, { roleTitleRaw: row.roleTitleRaw, roleType: row.roleType, positionNameNormalized: row.positionNameNormalized, organizationUnitId: unitId }); positions.set(positionKey, positionId) }
+    const unitId = ensureUnit(row.unitName, row.unitType)
+    const positionId = ensurePosition(row.roleTitleRaw, row.roleType, row.positionNameNormalized, unitId)
     const assignmentKey = `${personId}|${positionId}|${row.startDate}|${row.endDate ?? ''}`
     const existingAssignment = existingAssignments.get(assignmentKey)
-    if (existingAssignment) assignments.push(existingAssignment)
+    if (existingAssignment) assignmentIds.push(existingAssignment)
     else {
       const assignmentId = engine.assignRole(companyId, { personId, positionId, startDate: row.startDate, endDate: row.endDate, isCurrent: row.isCurrent, sourceId: row.sourceId, evidenceId: row.evidenceId })
-      existingAssignments.set(assignmentKey, assignmentId); assignments.push(assignmentId)
+      existingAssignments.set(assignmentKey, assignmentId); assignmentIds.push(assignmentId)
+    }
+    if (row.managerRoleTitleRaw) {
+      const managerUnitId = ensureUnit(row.managerUnitName, row.managerUnitType)
+      const managerPositionId = ensurePosition(row.managerRoleTitleRaw, row.managerRoleType, undefined, managerUnitId)
+      const startDate = row.reportingStartDate ?? row.startDate; const endDate = row.reportingEndDate ?? row.endDate; const relationshipType = row.reportingRelationshipType ?? 'solid'
+      const lineKey = `${positionId}|${managerPositionId}|${startDate}|${endDate ?? ''}|${relationshipType}`
+      const existingLine = existingReportingLines.get(lineKey)
+      if (existingLine) reportingLineIds.push(existingLine)
+      else {
+        const reportingLineId = engine.addReportingLine(companyId, { subordinatePositionId: positionId, managerPositionId, relationshipType, startDate, endDate, evidenceId: row.evidenceId })
+        existingReportingLines.set(lineKey, reportingLineId); reportingLineIds.push(reportingLineId)
+      }
     }
   }
-  return assignments
+  return { assignmentIds, reportingLineIds }
+
+  function ensureUnit(name: string | undefined, type: string | undefined): string | undefined {
+    if (!name) return undefined
+    const key = normalize(name); const existing = units.get(key)
+    if (existing) return existing
+    const id = engine.createOrganizationUnit(companyId, { name, unitType: type ?? 'department' }); units.set(key, id); return id
+  }
+
+  function ensurePosition(title: string, type: string | undefined, normalizedTitle: string | undefined, organizationUnitId: string | undefined): string {
+    const key = `${normalize(title)}|${normalize(type)}|${organizationUnitId ?? ''}`; const existing = positions.get(key)
+    if (existing) return existing
+    const id = engine.createPosition(companyId, { roleTitleRaw: title, roleType: type, positionNameNormalized: normalizedTitle, organizationUnitId }); positions.set(key, id); return id
+  }
 }
 
 export function parseManagementCsv(csv: string): ManagementCsvRow[] {
@@ -63,7 +88,11 @@ export function parseManagementCsv(csv: string): ManagementCsvRow[] {
     validateIsoDate(startDate, `Management CSV row ${position + 2} start_date`)
     const endDate = get(row, 'end_date'); if (endDate) validateIsoDate(endDate, `Management CSV row ${position + 2} end_date`)
     if (endDate && startDate > endDate) throw new Error(`Management CSV row ${position + 2} has end_date before start_date`)
-    return { nameZh: get(row, 'name_zh'), nameEn: get(row, 'name_en'), birthYear, biography: get(row, 'biography'), unitName: get(row, 'unit_name'), unitType: get(row, 'unit_type'), roleTitleRaw, roleType: get(row, 'role_type'), positionNameNormalized: get(row, 'position_name_normalized'), startDate, endDate, isCurrent: ['1', 'true', 'yes'].includes((get(row, 'is_current') ?? '').toLowerCase()), sourceId: get(row, 'source_id'), evidenceId: get(row, 'evidence_id') }
+    const reportingStartDate = get(row, 'reporting_start_date'); if (reportingStartDate) validateIsoDate(reportingStartDate, `Management CSV row ${position + 2} reporting_start_date`)
+    const reportingEndDate = get(row, 'reporting_end_date'); if (reportingEndDate) validateIsoDate(reportingEndDate, `Management CSV row ${position + 2} reporting_end_date`)
+    if (reportingStartDate && reportingEndDate && reportingStartDate > reportingEndDate) throw new Error(`Management CSV row ${position + 2} has reporting_end_date before reporting_start_date`)
+    const relationship = get(row, 'reporting_relationship_type'); if (relationship && relationship !== 'solid' && relationship !== 'dotted') throw new Error(`Management CSV row ${position + 2} has invalid reporting_relationship_type`)
+    return { nameZh: get(row, 'name_zh'), nameEn: get(row, 'name_en'), birthYear, biography: get(row, 'biography'), unitName: get(row, 'unit_name'), unitType: get(row, 'unit_type'), roleTitleRaw, roleType: get(row, 'role_type'), positionNameNormalized: get(row, 'position_name_normalized'), startDate, endDate, isCurrent: ['1', 'true', 'yes'].includes((get(row, 'is_current') ?? '').toLowerCase()), sourceId: get(row, 'source_id'), evidenceId: get(row, 'evidence_id'), managerRoleTitleRaw: get(row, 'manager_role_title_raw'), managerRoleType: get(row, 'manager_role_type'), managerUnitName: get(row, 'manager_unit_name'), managerUnitType: get(row, 'manager_unit_type'), reportingRelationshipType: relationship as 'solid' | 'dotted' | undefined, reportingStartDate, reportingEndDate }
   })
 }
 

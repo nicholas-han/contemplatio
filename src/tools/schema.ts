@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const companyIdSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
-export const factQuerySchema = z.object({ companyId: companyIdSchema, metricId: z.string().optional(), limit: z.number().int().positive().max(5000).optional() })
+export const factQuerySchema = z.object({ companyId: companyIdSchema, metricId: z.string().optional(), limit: z.number().int().positive().max(5000).optional(), periodStartFrom: z.string().optional(), periodEndTo: z.string().optional(), dimensions: z.record(z.string(), z.string()).optional() })
 export const estimateQuerySchema = factQuerySchema.extend({ targetPeriodEnd: z.string().optional(), asOfFrom: z.string().optional(), asOfTo: z.string().optional() })
 export const evidenceQuerySchema = z.object({ companyId: companyIdSchema, evidenceId: z.string().min(1) })
 export const coalScenarioSchema = z.object({ companyId: companyIdSchema, input: z.object({ coalPrice: z.number(), annualProduction: z.number(), years: z.number().int().min(1).max(50), ebitdaMargin: z.number(), taxRate: z.number(), discountRate: z.number(), terminalGrowth: z.number(), netDebt: z.number(), sharesOutstanding: z.number().positive() }), notes: z.string().optional() })
@@ -18,6 +18,7 @@ export const researchToolDefinitions: ResearchToolDefinition[] = [
   { name: 'getFinancials', description: 'Query financial facts for a company.', inputSchema: factQuerySchema },
   { name: 'getOperatingMetrics', description: 'Query operating facts for a company.', inputSchema: factQuerySchema },
   { name: 'getMetrics', description: 'List active metric definitions available in a company workspace.', inputSchema: metricQuerySchema },
+  { name: 'getTaxonomy', description: 'List configured industries and business lines.', inputSchema: z.object({ companyId: companyIdSchema }) },
   { name: 'getEstimates', description: 'Query point-in-time analyst estimates, including historical as-of windows.', inputSchema: estimateQuerySchema },
   { name: 'getManagement', description: 'Get management people and role assignments.', inputSchema: z.object({ companyId: companyIdSchema }) },
   { name: 'getReportingLines', description: 'Get historical management reporting lines.', inputSchema: z.object({ companyId: companyIdSchema }) },

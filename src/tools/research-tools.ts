@@ -9,9 +9,10 @@ export function createEquityResearchTools(archive: EquityArchive) {
   return {
     listCompanies: () => archive.listCompanies(),
     getCompany: async (companyId: string) => (await archive.openCompany(companyId)).manifest,
-    getFinancials: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, { ...factFilter(metricId, limit), category: 'financial' }),
-    getOperatingMetrics: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, { ...factFilter(metricId, limit), category: 'operating' }),
+    getFinancials: (companyId: string, metricId?: string, limit?: number, dimensions?: Record<string, string>, periodStartFrom?: string, periodEndTo?: string) => data.listFacts(companyId, { ...factFilter(metricId, limit, dimensions, periodStartFrom, periodEndTo), category: 'financial' }),
+    getOperatingMetrics: (companyId: string, metricId?: string, limit?: number, dimensions?: Record<string, string>, periodStartFrom?: string, periodEndTo?: string) => data.listFacts(companyId, { ...factFilter(metricId, limit, dimensions, periodStartFrom, periodEndTo), category: 'operating' }),
     getMetrics: (companyId: string, category?: 'financial' | 'operating') => data.listMetricDefinitions(companyId, category),
+    getTaxonomy: (companyId: string) => data.listTaxonomy(companyId),
     getEstimates: (companyId: string, metricId?: string, limit?: number, asOfFrom?: string, asOfTo?: string) => data.listEstimates(companyId, { ...(metricId ? { metricId } : {}), ...(limit !== undefined ? { limit } : {}), ...(asOfFrom ? { asOfFrom } : {}), ...(asOfTo ? { asOfTo } : {}) }),
     getManagement: (companyId: string) => data.listPeople(companyId),
     getReportingLines: (companyId: string) => data.listReportingLines(companyId),
@@ -29,8 +30,8 @@ export function createEquityResearchTools(archive: EquityArchive) {
   }
 }
 
-function factFilter(metricId?: string, limit?: number): { metricId?: string; limit?: number } {
-  return { ...(metricId ? { metricId } : {}), ...(limit !== undefined ? { limit } : {}) }
+function factFilter(metricId?: string, limit?: number, dimensions?: Record<string, string>, periodStartFrom?: string, periodEndTo?: string): { metricId?: string; limit?: number; dimensions?: Record<string, string>; periodStartFrom?: string; periodEndTo?: string } {
+  return { ...(metricId ? { metricId } : {}), ...(limit !== undefined ? { limit } : {}), ...(dimensions ? { dimensions } : {}), ...(periodStartFrom ? { periodStartFrom } : {}), ...(periodEndTo ? { periodEndTo } : {}) }
 }
 
 export type EquityResearchTools = ReturnType<typeof createEquityResearchTools>

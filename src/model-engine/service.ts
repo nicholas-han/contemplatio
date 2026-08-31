@@ -4,6 +4,8 @@ import { runCoalScenario, type CoalScenarioInput, type CoalScenarioOutput } from
 import { runBankPbRoe, type BankPbRoeInput, type BankPbRoeOutput } from './bank.js'
 import { runInsurancePEv, runSotp, type InsurancePEvInput, type InsurancePEvOutput, type SotpComponent, type SotpOutput } from './insurance.js'
 
+export interface ModelRunRecord { modelRunId: string; modelId: string; runAt: string; inputs: Record<string, unknown>; outputs: Record<string, unknown> }
+
 export class EquityModelEngine {
   constructor(readonly archive: EquityArchive) {}
 
@@ -21,14 +23,21 @@ export class EquityModelEngine {
   saveScenario(companyId: string, input: { name: string; modelId: string; modelVersion?: string; parameters: Record<string, unknown> }): string {
     if (!input.name.trim() || !input.modelId.trim()) throw new Error('scenario requires name and modelId')
     const scenarioId = `scenario-${randomUUID()}`
-    this.archive.withDatabase(companyId, (database) => {
+    return this.archive.withDatabase(companyId, (database) => {
       const company = database.prepare('SELECT company_id FROM companies WHERE company_id = ?').get(companyId)
       if (!company) throw new Error(`Unknown company: ${companyId}`)
       const now = new Date().toISOString()
-      database.prepare(`INSERT INTO scenarios (scenario_id, company_id, name, model_id, model_version, parameters_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(scenarioId, companyId, input.name, input.modelId, input.modelVersion ?? '0.1.0', JSON.stringify(input.parameters), now, now)
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const existing = database.prepare('SELECT scenario_id FROM scenarios WHERE company_id = ? AND model_id = ? AND name = ?').get(companyId, input.modelId, input.name) as { scenario_id: string } | undefined
+        if (existing) {
+          database.prepare('UPDATE scenarios SET model_version = ?, parameters_json = ?, updated_at = ? WHERE scenario_id = ?').run(input.modelVersion ?? '0.1.0', JSON.stringify(input.parameters), now, existing.scenario_id)
+        } else database.prepare(`INSERT INTO scenarios (scenario_id, company_id, name, model_id, model_version, parameters_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(scenarioId, companyId, input.name, input.modelId, input.modelVersion ?? '0.1.0', JSON.stringify(input.parameters), now, now)
+        database.exec('COMMIT')
+        return existing?.scenario_id ?? scenarioId
+      } catch (error) { database.exec('ROLLBACK'); throw error }
     })
-    return scenarioId
   }
 
   listScenarios(companyId: string): Array<{ scenarioId: string; name: string; modelId: string; modelVersion: string; parameters: Record<string, unknown>; updatedAt: string }> {
@@ -38,10 +47,10 @@ export class EquityModelEngine {
     })))
   }
 
-  listRuns(companyId: string): Array<{ modelRunId: string; modelId: string; runAt: string; inputs: CoalScenarioInput; outputs: CoalScenarioOutput }> {
+  listRuns(companyId: string): ModelRunRecord[] {
     return this.archive.withDatabase(companyId, (database) => (database.prepare('SELECT * FROM model_runs WHERE company_id = ? ORDER BY run_at DESC').all(companyId) as Array<Record<string, unknown>>).map((row) => ({
       modelRunId: String(row.model_run_id), modelId: String(row.model_id), runAt: String(row.run_at),
-      inputs: JSON.parse(String(row.inputs_json)) as CoalScenarioInput, outputs: JSON.parse(String(row.outputs_json)) as CoalScenarioOutput,
+      inputs: JSON.parse(String(row.inputs_json)) as Record<string, unknown>, outputs: JSON.parse(String(row.outputs_json)) as Record<string, unknown>,
     })))
   }
 
