@@ -79,6 +79,8 @@ export interface PersonRecord { personId: string; nameZh: string | null; nameEn:
 export interface PositionRecord { positionId: string; roleType: string | null; roleTitleRaw: string; positionNameNormalized: string | null; organizationUnitId: string | null }
 export interface RoleAssignmentRecord { assignmentId: string; personId: string; positionId: string; startDate: string; endDate: string | null; isCurrent: boolean }
 export interface ReportingLineRecord { reportingLineId: string; subordinatePositionId: string; managerPositionId: string; relationshipType: 'solid' | 'dotted'; startDate: string; endDate: string | null }
+export interface ShareClassRecord { shareClassId: string; name: string; securityType: string; exchange: string | null; ticker: string | null; currency: string | null }
+export interface CapTableSnapshotRecord { snapshotId: string; asOfDate: string; shareClasses: Array<ShareClassRecord & { sharesOutstanding: number; percentageOfTotalEquity: number | null }>; positions: Array<{ holderName: string; holderId: string | null; shareClassId: string; shares: number | null; ownershipPct: number | null; rank: number | null }> }
 
 export interface FactFilter {
   metricId?: string
@@ -329,6 +331,49 @@ export class EquityDataEngine {
       const id = `reporting-line-${randomUUID()}`
       database.prepare('INSERT INTO reporting_lines (reporting_line_id, company_id, subordinate_position_id, manager_position_id, relationship_type, start_date, end_date, evidence_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, companyId, input.subordinatePositionId, input.managerPositionId, input.relationshipType, input.startDate, input.endDate ?? null, input.evidenceId ?? null)
       return id
+    })
+  }
+
+  createShareClass(companyId: string, input: { name: string; securityType: string; exchange?: string; ticker?: string; currency?: string }): string {
+    if (!input.name.trim() || !input.securityType.trim()) throw new Error('share class requires name and securityType')
+    return this.archive.withDatabase(companyId, (database) => {
+      assertCompany(database, companyId)
+      const id = `share-class-${randomUUID()}`
+      database.prepare('INSERT INTO share_classes (share_class_id, company_id, name, security_type, exchange, ticker, currency) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, companyId, input.name, input.securityType, input.exchange ?? null, input.ticker ?? null, input.currency ?? null)
+      return id
+    })
+  }
+
+  createCapTableSnapshot(companyId: string, input: { asOfDate: string; sourceId?: string; evidenceId?: string; classTotals: Array<{ shareClassId: string; sharesOutstanding: number; percentageOfTotalEquity?: number }>; positions?: Array<{ holderName: string; holderId?: string; shareClassId: string; shares?: number; ownershipPct?: number; rank?: number }> }): string {
+    validateDate(input.asOfDate, 'asOfDate')
+    if (!input.classTotals.length) throw new Error('cap table snapshot requires class totals')
+    return this.archive.withDatabase(companyId, (database) => {
+      assertCompany(database, companyId)
+      for (const total of input.classTotals) {
+        if (!Number.isFinite(total.sharesOutstanding) || total.sharesOutstanding < 0) throw new Error('sharesOutstanding must be non-negative')
+        if (!database.prepare('SELECT share_class_id FROM share_classes WHERE share_class_id = ? AND company_id = ? AND active = 1').get(total.shareClassId, companyId)) throw new Error(`Unknown share class: ${total.shareClassId}`)
+      }
+      for (const position of input.positions ?? []) if (!database.prepare('SELECT share_class_id FROM share_classes WHERE share_class_id = ? AND company_id = ? AND active = 1').get(position.shareClassId, companyId)) throw new Error(`Unknown share class: ${position.shareClassId}`)
+      const snapshotId = `captable-snapshot-${randomUUID()}`; const now = new Date().toISOString()
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        database.prepare('INSERT INTO captable_snapshots (captable_snapshot_id, company_id, as_of_date, source_id, evidence_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(snapshotId, companyId, input.asOfDate, input.sourceId ?? null, input.evidenceId ?? null, now)
+        const total = database.prepare('INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding, percentage_of_total_equity) VALUES (?, ?, ?, ?)')
+        for (const item of input.classTotals) total.run(snapshotId, item.shareClassId, item.sharesOutstanding, item.percentageOfTotalEquity ?? null)
+        const position = database.prepare('INSERT INTO captable_positions (captable_position_id, captable_snapshot_id, holder_name, holder_id, share_class_id, shares, ownership_pct, rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        for (const item of input.positions ?? []) position.run(`captable-position-${randomUUID()}`, snapshotId, item.holderName, item.holderId ?? null, item.shareClassId, item.shares ?? null, item.ownershipPct ?? null, item.rank ?? null)
+        database.exec('COMMIT')
+      } catch (error) { database.exec('ROLLBACK'); throw error }
+      return snapshotId
+    })
+  }
+
+  listCapTable(companyId: string): CapTableSnapshotRecord[] {
+    return this.archive.withDatabase(companyId, (database) => {
+      const snapshots = database.prepare('SELECT captable_snapshot_id, as_of_date FROM captable_snapshots WHERE company_id = ? ORDER BY as_of_date DESC').all(companyId) as Array<Record<string, unknown>>
+      const totals = database.prepare(`SELECT t.captable_snapshot_id, t.share_class_id, t.shares_outstanding, t.percentage_of_total_equity, s.name, s.security_type, s.exchange, s.ticker, s.currency FROM captable_class_totals t JOIN share_classes s ON s.share_class_id = t.share_class_id`).all() as Array<Record<string, unknown>>
+      const positions = database.prepare('SELECT captable_snapshot_id, holder_name, holder_id, share_class_id, shares, ownership_pct, rank FROM captable_positions').all() as Array<Record<string, unknown>>
+      return snapshots.map((snapshot) => ({ snapshotId: String(snapshot.captable_snapshot_id), asOfDate: String(snapshot.as_of_date), shareClasses: totals.filter((row) => row.captable_snapshot_id === snapshot.captable_snapshot_id).map((row) => ({ shareClassId: String(row.share_class_id), name: String(row.name), securityType: String(row.security_type), exchange: row.exchange ? String(row.exchange) : null, ticker: row.ticker ? String(row.ticker) : null, currency: row.currency ? String(row.currency) : null, sharesOutstanding: Number(row.shares_outstanding), percentageOfTotalEquity: row.percentage_of_total_equity === null ? null : Number(row.percentage_of_total_equity) })), positions: positions.filter((row) => row.captable_snapshot_id === snapshot.captable_snapshot_id).map((row) => ({ holderName: String(row.holder_name), holderId: row.holder_id ? String(row.holder_id) : null, shareClassId: String(row.share_class_id), shares: row.shares === null ? null : Number(row.shares), ownershipPct: row.ownership_pct === null ? null : Number(row.ownership_pct), rank: row.rank === null ? null : Number(row.rank) })) }))
     })
   }
 

@@ -328,6 +328,51 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX model_runs_company_idx ON model_runs(company_id, run_at);
     `,
   },
+  {
+    version: 7,
+    name: 'cap_table_snapshots',
+    sql: `
+      CREATE TABLE share_classes (
+        share_class_id TEXT PRIMARY KEY,
+        company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        security_type TEXT NOT NULL,
+        exchange TEXT,
+        ticker TEXT,
+        currency TEXT,
+        voting_rights_metadata TEXT CHECK (voting_rights_metadata IS NULL OR json_valid(voting_rights_metadata)),
+        active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+        UNIQUE (company_id, name)
+      ) STRICT;
+      CREATE TABLE captable_snapshots (
+        captable_snapshot_id TEXT PRIMARY KEY,
+        company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+        as_of_date TEXT NOT NULL,
+        source_id TEXT REFERENCES sources(source_id) ON DELETE RESTRICT,
+        evidence_id TEXT REFERENCES evidence(evidence_id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE captable_class_totals (
+        captable_snapshot_id TEXT NOT NULL REFERENCES captable_snapshots(captable_snapshot_id) ON DELETE CASCADE,
+        share_class_id TEXT NOT NULL REFERENCES share_classes(share_class_id) ON DELETE RESTRICT,
+        shares_outstanding REAL NOT NULL,
+        percentage_of_total_equity REAL,
+        PRIMARY KEY (captable_snapshot_id, share_class_id)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE captable_positions (
+        captable_position_id TEXT PRIMARY KEY,
+        captable_snapshot_id TEXT NOT NULL REFERENCES captable_snapshots(captable_snapshot_id) ON DELETE CASCADE,
+        holder_name TEXT NOT NULL,
+        holder_id TEXT,
+        share_class_id TEXT NOT NULL REFERENCES share_classes(share_class_id) ON DELETE RESTRICT,
+        shares REAL,
+        ownership_pct REAL,
+        rank INTEGER
+      ) STRICT;
+      CREATE INDEX captable_snapshots_company_date_idx ON captable_snapshots(company_id, as_of_date);
+      CREATE INDEX captable_positions_snapshot_idx ON captable_positions(captable_snapshot_id, rank);
+    `,
+  },
 ]
 
 export function migrateDatabase(database: DatabaseSync): void {

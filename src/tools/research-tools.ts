@@ -12,6 +12,7 @@ export function createEquityResearchTools(archive: EquityArchive) {
     getOperatingMetrics: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, { ...factFilter(metricId, limit), category: 'operating' }),
     getEstimates: (companyId: string, metricId?: string) => data.listEstimates(companyId, metricId),
     getManagement: (companyId: string) => data.listPeople(companyId),
+    getCapTable: (companyId: string) => data.listCapTable(companyId),
     getEvidence: (companyId: string, evidenceId: string) => data.getEvidence(companyId, evidenceId),
     runCoalScenario: (companyId: string, input: CoalScenarioInput, notes?: string) => models.runCoalScenario(companyId, input, undefined, notes),
     getModelRuns: (companyId: string) => models.listRuns(companyId),

@@ -66,13 +66,13 @@ test('company initialization creates an inspectable workspace and applies migrat
     const tables = database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type = 'table'").get() as { count: number }
     return { migrations: migrations.count, tables: tables.count }
   })
-  assert.equal(result.migrations, 6)
+  assert.equal(result.migrations, 7)
   assert.ok(result.tables >= 8)
 
   await archive.openCompany(manifest.company_id)
   assert.equal(archive.withDatabase(manifest.company_id, (database) =>
     (database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count,
-  ), 6)
+  ), 7)
 })
 
 test('retained artifact provenance remains valid after copying a company workspace', async () => {
@@ -207,6 +207,9 @@ test('data engine validates and queries facts through the archive boundary', asy
   assert.equal(engine.listPeople(manifest.company_id)[0]?.assignments[0]?.assignmentId, assignmentId)
   const managerPositionId = engine.createPosition(manifest.company_id, { roleTitleRaw: 'Chairman', roleType: 'chairman' })
   assert.match(engine.addReportingLine(manifest.company_id, { subordinatePositionId: positionId, managerPositionId, relationshipType: 'solid', startDate: '2025-01-01' }), /^reporting-line-/)
+  const shareClassId = engine.createShareClass(manifest.company_id, { name: 'A shares', securityType: 'common_equity', exchange: 'SSE', ticker: '600188', currency: 'CNY' })
+  const snapshotId = engine.createCapTableSnapshot(manifest.company_id, { asOfDate: '2025-12-31', classTotals: [{ shareClassId, sharesOutstanding: 1000, percentageOfTotalEquity: 100 }], positions: [{ holderName: 'Test holder', shareClassId, shares: 100, ownershipPct: 10, rank: 1 }] })
+  assert.equal(engine.listCapTable(manifest.company_id)[0]?.snapshotId, snapshotId)
   assert.throws(() => engine.createFact(manifest.company_id, {
     metricId: 'coal.production', periodType: 'duration', periodStart: '2025-01-01', periodEnd: '2025-12-31',
     value: 10, dimensions: { unsupported: 'x' }, evidenceIds: ['evidence-fact'],

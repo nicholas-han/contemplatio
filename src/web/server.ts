@@ -42,6 +42,7 @@ export class EquityWebServer {
       if (url.pathname === '/api/facts') return sendJson(response, this.dataEngine.listFacts(this.companyId))
       if (url.pathname === '/api/estimates') return sendJson(response, this.dataEngine.listEstimates(this.companyId, url.searchParams.get('metric') ?? undefined))
       if (url.pathname === '/api/people') return sendJson(response, this.dataEngine.listPeople(this.companyId))
+      if (url.pathname === '/api/cap-table') return sendJson(response, this.dataEngine.listCapTable(this.companyId))
       if (url.pathname.startsWith('/api/evidence/')) return sendJson(response, this.dataEngine.getEvidence(this.companyId, decodeURIComponent(url.pathname.slice('/api/evidence/'.length))))
       if (request.method === 'POST' && url.pathname === '/api/estimates/import') return void this.handleEstimateImport(request, response)
       if (request.method === 'POST' && url.pathname === '/api/models/coal/run') return void this.handleCoalRun(request, response)
