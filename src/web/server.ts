@@ -40,7 +40,7 @@ export class EquityWebServer {
         return sendJson(response, observations)
       }
       if (url.pathname === '/api/companies') return void this.handleCompanies(response)
-      if (url.pathname === '/api/facts') return sendJson(response, this.dataEngine.listFacts(this.companyId))
+      if (url.pathname === '/api/facts') return sendJson(response, this.dataEngine.listFacts(this.companyId, factFilterFromUrl(url)))
       if (url.pathname === '/api/estimates') return sendJson(response, this.dataEngine.listEstimates(this.companyId, url.searchParams.get('metric') ?? undefined))
       if (url.pathname === '/api/people') return sendJson(response, this.dataEngine.listPeople(this.companyId))
       if (url.pathname === '/api/cap-table') return sendJson(response, this.dataEngine.listCapTable(this.companyId))
@@ -121,7 +121,7 @@ function renderPage(companyId: string, observations: LegacyObservationRecord[], 
     <td>${escapeHtml(observation.periodStart ?? observation.periodEnd ?? '-')}</td>
     <td>${escapeHtml(observation.value ?? '-')} ${escapeHtml(observation.unit ?? '')}</td>
     <td><span class="status status-${escapeHtml(observation.reviewStatus)}">${escapeHtml(observation.reviewStatus)}</span></td>
-    <td>${escapeHtml(observation.sourceLocator ?? '-')}</td>
+    <td>${observation.evidenceId ? `<a href="/api/evidence/${encodeURIComponent(observation.evidenceId)}">${escapeHtml(observation.sourceLocator ?? observation.evidenceId)}</a>` : escapeHtml(observation.sourceLocator ?? '-')}</td>
   </tr>`).join('')
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Conte Equity Research</title><style>
@@ -153,4 +153,15 @@ function readBody(request: IncomingMessage): Promise<string> {
 
 function parsePayload(body: string, fromForm: (form: URLSearchParams) => unknown): unknown {
   try { return JSON.parse(body) } catch { return fromForm(new URLSearchParams(body)) }
+}
+
+function factFilterFromUrl(url: URL): Parameters<EquityDataEngine['listFacts']>[1] {
+  const category = url.searchParams.get('category')
+  return {
+    ...(url.searchParams.get('metric') ? { metricId: url.searchParams.get('metric')! } : {}),
+    ...(category === 'financial' || category === 'operating' ? { category } : {}),
+    ...(url.searchParams.get('from') ? { periodStartFrom: url.searchParams.get('from')! } : {}),
+    ...(url.searchParams.get('to') ? { periodEndTo: url.searchParams.get('to')! } : {}),
+    ...(url.searchParams.has('limit') ? { limit: Number(url.searchParams.get('limit')) } : {}),
+  }
 }
