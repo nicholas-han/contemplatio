@@ -20,6 +20,8 @@ export function createEquityResearchTools(archive: EquityArchive) {
     runInsurancePEv: (companyId: string, input: Parameters<EquityModelEngine['runInsurancePEv']>[1], notes?: string) => models.runInsurancePEv(companyId, input, notes),
     runSotp: (companyId: string, components: Parameters<EquityModelEngine['runSotp']>[1], adjustments?: number, notes?: string) => models.runSotp(companyId, components, adjustments, notes),
     getModelRuns: (companyId: string) => models.listRuns(companyId),
+    saveScenario: (companyId: string, input: Parameters<EquityModelEngine['saveScenario']>[1]) => models.saveScenario(companyId, input),
+    getScenarios: (companyId: string) => models.listScenarios(companyId),
   }
 }
 

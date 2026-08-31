@@ -51,6 +51,8 @@ export class EquityWebServer {
       if (request.method === 'POST' && url.pathname === '/api/models/insurance/p-ev') return void this.handleInsuranceRun(request, response)
       if (request.method === 'POST' && url.pathname === '/api/models/sotp') return void this.handleSotpRun(request, response)
       if (url.pathname === '/api/models/runs') return sendJson(response, this.modelEngine.listRuns(this.companyId))
+      if (request.method === 'POST' && url.pathname === '/api/models/scenarios') return void this.handleScenarioSave(request, response)
+      if (url.pathname === '/api/models/scenarios') return sendJson(response, this.modelEngine.listScenarios(this.companyId))
       if (url.pathname === '/' || url.pathname === `/companies/${this.companyId}`) {
         return sendHtml(response, renderPage(this.companyId, this.dataEngine.listLegacyObservations(this.companyId), this.dataEngine.listFacts(this.companyId), this.dataEngine.listPeople(this.companyId), this.dataEngine.listCapTable(this.companyId), this.dataEngine.listSources(this.companyId)))
       }
@@ -90,6 +92,11 @@ export class EquityWebServer {
 
   private async handleSotpRun(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try { const payload = JSON.parse(await readBody(request)) as { components: Parameters<EquityModelEngine['runSotp']>[1]; adjustments?: number; notes?: string }; sendJson(response, this.modelEngine.runSotp(this.companyId, payload.components, payload.adjustments, payload.notes)) }
+    catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 400) }
+  }
+
+  private async handleScenarioSave(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    try { const payload = JSON.parse(await readBody(request)) as Parameters<EquityModelEngine['saveScenario']>[1]; sendJson(response, { scenarioId: this.modelEngine.saveScenario(this.companyId, payload) }) }
     catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 400) }
   }
 }

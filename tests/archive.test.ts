@@ -226,6 +226,8 @@ test('coal model calculates and persists historical model runs', async () => {
   const engine = new EquityModelEngine(archive)
   const run = engine.runCoalScenario(manifest.company_id, { coalPrice: 700, annualProduction: 100, years: 5, ebitdaMargin: 0.25, taxRate: 0.25, discountRate: 0.1, terminalGrowth: 0.02, netDebt: 1000, sharesOutstanding: 100 })
   assert.equal(engine.listRuns(manifest.company_id)[0]?.modelRunId, run.modelRunId)
+  const scenarioId = engine.saveScenario(manifest.company_id, { name: 'Base', modelId: 'coal-scenario', parameters: { coalPrice: 700 } })
+  assert.equal(engine.listScenarios(manifest.company_id)[0]?.scenarioId, scenarioId)
   const tools = createEquityResearchTools(archive)
   assert.equal((await tools.getCompany(manifest.company_id)).company_id, manifest.company_id)
   assert.equal(tools.getModelRuns(manifest.company_id).length, 1)
