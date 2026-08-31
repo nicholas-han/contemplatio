@@ -46,6 +46,7 @@ export class EquityWebServer {
       if (url.pathname === '/api/cap-table') return sendJson(response, this.dataEngine.listCapTable(this.companyId))
       if (url.pathname === '/api/sources') return sendJson(response, this.dataEngine.listSources(this.companyId))
       if (url.pathname.startsWith('/api/evidence/')) return sendJson(response, this.dataEngine.getEvidence(this.companyId, decodeURIComponent(url.pathname.slice('/api/evidence/'.length))))
+      if (url.pathname.startsWith('/api/artifacts/')) return void this.handleArtifact(response, decodeURIComponent(url.pathname.slice('/api/artifacts/'.length)))
       if (request.method === 'POST' && url.pathname === '/api/estimates/import') return void this.handleEstimateImport(request, response)
       if (request.method === 'POST' && url.pathname === '/api/models/coal/run') return void this.handleCoalRun(request, response)
       if (request.method === 'POST' && url.pathname === '/api/models/bank/pb-roe') return void this.handleBankRun(request, response)
@@ -55,7 +56,7 @@ export class EquityWebServer {
       if (request.method === 'POST' && url.pathname === '/api/models/scenarios') return void this.handleScenarioSave(request, response)
       if (url.pathname === '/api/models/scenarios') return sendJson(response, this.modelEngine.listScenarios(this.companyId))
       if (url.pathname === '/' || url.pathname === `/companies/${this.companyId}`) {
-        return sendHtml(response, renderPage(this.companyId, this.dataEngine.listLegacyObservations(this.companyId), this.dataEngine.listFacts(this.companyId), this.dataEngine.listPeople(this.companyId), this.dataEngine.listCapTable(this.companyId), this.dataEngine.listSources(this.companyId), this.modelEngine.listScenarios(this.companyId), this.modelEngine.listRuns(this.companyId)))
+        return sendHtml(response, renderPage(this.companyId, this.dataEngine.listLegacyObservations(this.companyId), this.dataEngine.listFacts(this.companyId), this.dataEngine.listPeople(this.companyId), this.dataEngine.listCapTable(this.companyId), this.dataEngine.listSources(this.companyId), this.dataEngine.listEstimates(this.companyId), this.modelEngine.listScenarios(this.companyId), this.modelEngine.listRuns(this.companyId)))
       }
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found')
     } catch (error) {
@@ -66,6 +67,11 @@ export class EquityWebServer {
   private async handleCompanies(response: ServerResponse): Promise<void> {
     try { sendJson(response, await this.dataEngine.archive.listCompanies()) }
     catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 500) }
+  }
+
+  private async handleArtifact(response: ServerResponse, artifactId: string): Promise<void> {
+    try { const artifact = await this.dataEngine.archive.readArtifact(this.companyId, artifactId); response.writeHead(200, { 'content-type': artifact.mediaType, 'content-length': artifact.content.byteLength }).end(artifact.content) }
+    catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 404) }
   }
 
   private async handleEstimateImport(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -107,7 +113,7 @@ export class EquityWebServer {
   }
 }
 
-function renderPage(companyId: string, observations: LegacyObservationRecord[], facts: ReturnType<EquityDataEngine['listFacts']>, people: ReturnType<EquityDataEngine['listPeople']>, capTable: ReturnType<EquityDataEngine['listCapTable']>, sources: ReturnType<EquityDataEngine['listSources']>, scenarios: ReturnType<EquityModelEngine['listScenarios']>, runs: ReturnType<EquityModelEngine['listRuns']>): string {
+function renderPage(companyId: string, observations: LegacyObservationRecord[], facts: ReturnType<EquityDataEngine['listFacts']>, people: ReturnType<EquityDataEngine['listPeople']>, capTable: ReturnType<EquityDataEngine['listCapTable']>, sources: ReturnType<EquityDataEngine['listSources']>, estimates: ReturnType<EquityDataEngine['listEstimates']>, scenarios: ReturnType<EquityModelEngine['listScenarios']>, runs: ReturnType<EquityModelEngine['listRuns']>): string {
   const rows = observations.map((observation) => `<tr>
     <td><code>${escapeHtml(observation.observationId)}</code></td>
     <td>${escapeHtml(observation.legacyMetricId)}</td>

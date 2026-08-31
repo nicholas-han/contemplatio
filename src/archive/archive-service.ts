@@ -183,6 +183,12 @@ export class EquityArchive {
     return artifactPath
   }
 
+  async readArtifact(companyId: string, artifactId: string): Promise<{ path: string; content: Buffer; mediaType: string }> {
+    const path = await this.resolveArtifact(companyId, artifactId)
+    const mediaType = this.withDatabase(companyId, (database) => (database.prepare('SELECT media_type FROM source_artifacts WHERE artifact_id = ?').get(artifactId) as { media_type: string }).media_type)
+    return { path, content: await readFile(path), mediaType }
+  }
+
   async verifyArtifact(companyId: string, artifactId: string): Promise<boolean> {
     const artifactPath = await this.resolveArtifact(companyId, artifactId)
     const expected = this.withDatabase(companyId, (database) => database.prepare(
