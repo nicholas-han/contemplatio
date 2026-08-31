@@ -16,6 +16,7 @@ export function createEquityResearchTools(archive: EquityArchive) {
     getSources: (companyId: string) => data.listSources(companyId),
     getEvidence: (companyId: string, evidenceId: string) => data.getEvidence(companyId, evidenceId),
     runCoalScenario: (companyId: string, input: CoalScenarioInput, notes?: string) => models.runCoalScenario(companyId, input, undefined, notes),
+    runBankPbRoe: (companyId: string, input: Parameters<EquityModelEngine['runBankPbRoe']>[1], notes?: string) => models.runBankPbRoe(companyId, input, notes),
     getModelRuns: (companyId: string) => models.listRuns(companyId),
   }
 }

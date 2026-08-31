@@ -13,6 +13,7 @@ import * as archivePlugin from '../src/plugins/archive.js'
 import * as modelPlugin from '../src/plugins/model-engine.js'
 import { EquityDataEngine } from '../src/data/data-engine.js'
 import { EquityModelEngine, runCoalScenario } from '../src/model-engine/service.js'
+import { runBankPbRoe } from '../src/model-engine/service.js'
 import { createEquityResearchTools } from '../src/tools/research-tools.js'
 
 const manifest: CompanyManifest = {
@@ -228,4 +229,7 @@ test('coal model calculates and persists historical model runs', async () => {
   const tools = createEquityResearchTools(archive)
   assert.equal((await tools.getCompany(manifest.company_id)).company_id, manifest.company_id)
   assert.equal(tools.getModelRuns(manifest.company_id).length, 1)
+  const bank = runBankPbRoe({ bookValuePerShare: 10, sustainableRoe: 0.12, costOfEquity: 0.1, terminalGrowth: 0.03, targetPb: 1.1 })
+  assert.equal(bank.valuePerShare, 11)
+  assert.ok(bank.justifiedPb > 1)
 })

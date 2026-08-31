@@ -47,6 +47,7 @@ export class EquityWebServer {
       if (url.pathname.startsWith('/api/evidence/')) return sendJson(response, this.dataEngine.getEvidence(this.companyId, decodeURIComponent(url.pathname.slice('/api/evidence/'.length))))
       if (request.method === 'POST' && url.pathname === '/api/estimates/import') return void this.handleEstimateImport(request, response)
       if (request.method === 'POST' && url.pathname === '/api/models/coal/run') return void this.handleCoalRun(request, response)
+      if (request.method === 'POST' && url.pathname === '/api/models/bank/pb-roe') return void this.handleBankRun(request, response)
       if (url.pathname === '/api/models/runs') return sendJson(response, this.modelEngine.listRuns(this.companyId))
       if (url.pathname === '/' || url.pathname === `/companies/${this.companyId}`) {
         return sendHtml(response, renderPage(this.companyId, this.dataEngine.listLegacyObservations(this.companyId), this.dataEngine.listFacts(this.companyId), this.dataEngine.listPeople(this.companyId), this.dataEngine.listCapTable(this.companyId), this.dataEngine.listSources(this.companyId)))
@@ -70,6 +71,13 @@ export class EquityWebServer {
     try {
       const payload = JSON.parse(await readBody(request)) as { input: Parameters<EquityModelEngine['runCoalScenario']>[1]; scenarioId?: string; notes?: string }
       sendJson(response, this.modelEngine.runCoalScenario(this.companyId, payload.input, payload.scenarioId, payload.notes))
+    } catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 400) }
+  }
+
+  private async handleBankRun(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    try {
+      const payload = JSON.parse(await readBody(request)) as { input: Parameters<EquityModelEngine['runBankPbRoe']>[1]; notes?: string }
+      sendJson(response, this.modelEngine.runBankPbRoe(this.companyId, payload.input, payload.notes))
     } catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 400) }
   }
 }

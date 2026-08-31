@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { EquityArchive } from '../archive/archive-service.js'
 import { runCoalScenario, type CoalScenarioInput, type CoalScenarioOutput } from './coal.js'
+import { runBankPbRoe, type BankPbRoeInput, type BankPbRoeOutput } from './bank.js'
 
 export class EquityModelEngine {
   constructor(readonly archive: EquityArchive) {}
@@ -22,6 +23,18 @@ export class EquityModelEngine {
       inputs: JSON.parse(String(row.inputs_json)) as CoalScenarioInput, outputs: JSON.parse(String(row.outputs_json)) as CoalScenarioOutput,
     })))
   }
+
+  runBankPbRoe(companyId: string, input: BankPbRoeInput, notes?: string): { modelRunId: string; output: BankPbRoeOutput } {
+    const output = runBankPbRoe(input)
+    const modelRunId = `model-run-${randomUUID()}`
+    this.archive.withDatabase(companyId, (database) => {
+      const now = new Date().toISOString()
+      database.prepare(`INSERT INTO model_runs (model_run_id, company_id, model_id, model_version, run_at, inputs_json, outputs_json, notes)
+        VALUES (?, ?, 'bank-pb-roe', '0.1.0', ?, ?, ?, ?)`).run(modelRunId, companyId, now, JSON.stringify(input), JSON.stringify(output), notes ?? null)
+    })
+    return { modelRunId, output }
+  }
 }
 
 export * from './coal.js'
+export * from './bank.js'
