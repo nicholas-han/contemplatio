@@ -13,7 +13,7 @@ import * as archivePlugin from '../src/plugins/archive.js'
 import * as modelPlugin from '../src/plugins/model-engine.js'
 import { EquityDataEngine } from '../src/data/data-engine.js'
 import { EquityModelEngine, runCoalScenario } from '../src/model-engine/service.js'
-import { runBankPbRoe } from '../src/model-engine/service.js'
+import { runBankPbRoe, runInsurancePEv, runSotp } from '../src/model-engine/service.js'
 import { createEquityResearchTools } from '../src/tools/research-tools.js'
 
 const manifest: CompanyManifest = {
@@ -232,4 +232,6 @@ test('coal model calculates and persists historical model runs', async () => {
   const bank = runBankPbRoe({ bookValuePerShare: 10, sustainableRoe: 0.12, costOfEquity: 0.1, terminalGrowth: 0.03, targetPb: 1.1 })
   assert.equal(bank.valuePerShare, 11)
   assert.ok(bank.justifiedPb > 1)
+  assert.equal(runInsurancePEv({ embeddedValue: 100, targetPEv: 1.2, netDebt: 20, sharesOutstanding: 10 }).valuePerShare, 10)
+  assert.equal(runSotp([{ name: 'Coal', value: 100 }, { name: 'Bank', value: 50, weight: 0.5 }], -10).adjustedValue, 115)
 })
