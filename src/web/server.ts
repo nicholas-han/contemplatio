@@ -43,12 +43,13 @@ export class EquityWebServer {
       if (url.pathname === '/api/estimates') return sendJson(response, this.dataEngine.listEstimates(this.companyId, url.searchParams.get('metric') ?? undefined))
       if (url.pathname === '/api/people') return sendJson(response, this.dataEngine.listPeople(this.companyId))
       if (url.pathname === '/api/cap-table') return sendJson(response, this.dataEngine.listCapTable(this.companyId))
+      if (url.pathname === '/api/sources') return sendJson(response, this.dataEngine.listSources(this.companyId))
       if (url.pathname.startsWith('/api/evidence/')) return sendJson(response, this.dataEngine.getEvidence(this.companyId, decodeURIComponent(url.pathname.slice('/api/evidence/'.length))))
       if (request.method === 'POST' && url.pathname === '/api/estimates/import') return void this.handleEstimateImport(request, response)
       if (request.method === 'POST' && url.pathname === '/api/models/coal/run') return void this.handleCoalRun(request, response)
       if (url.pathname === '/api/models/runs') return sendJson(response, this.modelEngine.listRuns(this.companyId))
       if (url.pathname === '/' || url.pathname === `/companies/${this.companyId}`) {
-        return sendHtml(response, renderPage(this.companyId, this.dataEngine.listLegacyObservations(this.companyId), this.dataEngine.listFacts(this.companyId)))
+        return sendHtml(response, renderPage(this.companyId, this.dataEngine.listLegacyObservations(this.companyId), this.dataEngine.listFacts(this.companyId), this.dataEngine.listPeople(this.companyId), this.dataEngine.listCapTable(this.companyId), this.dataEngine.listSources(this.companyId)))
       }
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found')
     } catch (error) {
@@ -73,7 +74,7 @@ export class EquityWebServer {
   }
 }
 
-function renderPage(companyId: string, observations: LegacyObservationRecord[], facts: ReturnType<EquityDataEngine['listFacts']>): string {
+function renderPage(companyId: string, observations: LegacyObservationRecord[], facts: ReturnType<EquityDataEngine['listFacts']>, people: ReturnType<EquityDataEngine['listPeople']>, capTable: ReturnType<EquityDataEngine['listCapTable']>, sources: ReturnType<EquityDataEngine['listSources']>): string {
   const rows = observations.map((observation) => `<tr>
     <td><code>${escapeHtml(observation.observationId)}</code></td>
     <td>${escapeHtml(observation.legacyMetricId)}</td>
@@ -89,6 +90,9 @@ function renderPage(companyId: string, observations: LegacyObservationRecord[], 
     <body><main><h1>Conte Equity Research</h1><p>Company: <code>${escapeHtml(companyId)}</code> · staging observations and authoritative facts</p>
     <h2>Legacy Observations (${observations.length})</h2><table><thead><tr><th>ID</th><th>Legacy metric</th><th>Mapped metric</th><th>Period</th><th>Value</th><th>Status</th><th>Source locator</th></tr></thead><tbody>${rows || '<tr><td class="empty" colspan="7">No observations</td></tr>'}</tbody></table>
     <h2>Facts (${facts.length})</h2><table><thead><tr><th>ID</th><th>Metric</th><th>Period</th><th>Value</th><th>Status</th></tr></thead><tbody>${facts.map((fact) => `<tr><td><code>${escapeHtml(fact.factId)}</code></td><td>${escapeHtml(fact.metricId)}</td><td>${escapeHtml(fact.periodStart ?? fact.periodEnd)} to ${escapeHtml(fact.periodEnd)}</td><td>${escapeHtml(String(fact.value))} ${escapeHtml(fact.unit ?? '')}</td><td>${escapeHtml(fact.verificationStatus)}</td></tr>`).join('') || '<tr><td class="empty" colspan="5">No facts</td></tr>'}</tbody></table>
+    <h2>Management (${people.length})</h2><table><thead><tr><th>Person</th><th>Position</th><th>Start</th><th>End</th><th>Current</th></tr></thead><tbody>${people.flatMap((person) => person.assignments.length ? person.assignments.map((assignment) => `<tr><td>${escapeHtml(person.nameZh ?? person.nameEn ?? person.personId)}</td><td><code>${escapeHtml(assignment.positionId)}</code></td><td>${escapeHtml(assignment.startDate)}</td><td>${escapeHtml(assignment.endDate ?? '-')}</td><td>${assignment.isCurrent ? 'yes' : 'no'}</td></tr>`) : [`<tr><td>${escapeHtml(person.nameZh ?? person.nameEn ?? person.personId)}</td><td colspan="4">No assignments</td></tr>`]).join('')}</tbody></table>
+    <h2>Cap Table (${capTable.length} snapshots)</h2>${capTable.map((snapshot) => `<h3>${escapeHtml(snapshot.asOfDate)}</h3><table><thead><tr><th>Share class</th><th>Outstanding</th><th>Holder</th><th>Shares</th><th>Ownership</th></tr></thead><tbody>${snapshot.shareClasses.map((shareClass) => `<tr><td>${escapeHtml(shareClass.name)}</td><td>${escapeHtml(String(shareClass.sharesOutstanding))}</td><td colspan="3">${escapeHtml(shareClass.exchange ?? '')} ${escapeHtml(shareClass.ticker ?? '')}</td></tr>`).join('')}${snapshot.positions.map((position) => `<tr><td></td><td></td><td>${escapeHtml(position.holderName)}</td><td>${escapeHtml(String(position.shares ?? '-'))}</td><td>${escapeHtml(String(position.ownershipPct ?? '-'))}%</td></tr>`).join('')}</tbody></table>`).join('') || '<p>No cap table snapshots</p>'}
+    <h2>Sources (${sources.length})</h2><table><thead><tr><th>ID</th><th>Type</th><th>Title</th><th>Publisher</th><th>Published</th></tr></thead><tbody>${sources.map((source) => `<tr><td><code>${escapeHtml(source.sourceId)}</code></td><td>${escapeHtml(source.sourceType)}</td><td>${escapeHtml(source.title)}</td><td>${escapeHtml(source.publisher)}</td><td>${escapeHtml(source.publishedAt ?? '-')}</td></tr>`).join('') || '<tr><td class="empty" colspan="5">No sources</td></tr>'}</tbody></table>
     <h2>Import Estimates CSV</h2><form method="post" action="/api/estimates/import"><textarea name="csv" rows="8" style="width:100%;font-family:monospace" placeholder="metric_id,target_period_type,target_period_start,target_period_end,as_of,provider,estimate_type,value,evidence_id"></textarea><p><button name="apply" value="false" type="submit">Preview</button> <button name="apply" value="true" type="submit">Import</button></p></form></main></body></html>`
 }
 

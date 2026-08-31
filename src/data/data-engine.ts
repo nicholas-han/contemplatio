@@ -81,6 +81,7 @@ export interface RoleAssignmentRecord { assignmentId: string; personId: string; 
 export interface ReportingLineRecord { reportingLineId: string; subordinatePositionId: string; managerPositionId: string; relationshipType: 'solid' | 'dotted'; startDate: string; endDate: string | null }
 export interface ShareClassRecord { shareClassId: string; name: string; securityType: string; exchange: string | null; ticker: string | null; currency: string | null }
 export interface CapTableSnapshotRecord { snapshotId: string; asOfDate: string; shareClasses: Array<ShareClassRecord & { sharesOutstanding: number; percentageOfTotalEquity: number | null }>; positions: Array<{ holderName: string; holderId: string | null; shareClassId: string; shares: number | null; ownershipPct: number | null; rank: number | null }> }
+export interface SourceRecord { sourceId: string; sourceType: string; title: string; publisher: string; publishedAt: string | null; originalUrl: string | null }
 
 export interface FactFilter {
   metricId?: string
@@ -375,6 +376,13 @@ export class EquityDataEngine {
       const positions = database.prepare('SELECT captable_snapshot_id, holder_name, holder_id, share_class_id, shares, ownership_pct, rank FROM captable_positions').all() as Array<Record<string, unknown>>
       return snapshots.map((snapshot) => ({ snapshotId: String(snapshot.captable_snapshot_id), asOfDate: String(snapshot.as_of_date), shareClasses: totals.filter((row) => row.captable_snapshot_id === snapshot.captable_snapshot_id).map((row) => ({ shareClassId: String(row.share_class_id), name: String(row.name), securityType: String(row.security_type), exchange: row.exchange ? String(row.exchange) : null, ticker: row.ticker ? String(row.ticker) : null, currency: row.currency ? String(row.currency) : null, sharesOutstanding: Number(row.shares_outstanding), percentageOfTotalEquity: row.percentage_of_total_equity === null ? null : Number(row.percentage_of_total_equity) })), positions: positions.filter((row) => row.captable_snapshot_id === snapshot.captable_snapshot_id).map((row) => ({ holderName: String(row.holder_name), holderId: row.holder_id ? String(row.holder_id) : null, shareClassId: String(row.share_class_id), shares: row.shares === null ? null : Number(row.shares), ownershipPct: row.ownership_pct === null ? null : Number(row.ownership_pct), rank: row.rank === null ? null : Number(row.rank) })) }))
     })
+  }
+
+  listSources(companyId: string): SourceRecord[] {
+    return this.archive.withDatabase(companyId, (database) => (database.prepare('SELECT source_id, source_type, title, publisher, published_at, original_url FROM sources ORDER BY published_at DESC, source_id').all() as Array<Record<string, unknown>>).map((row) => ({
+      sourceId: String(row.source_id), sourceType: String(row.source_type), title: String(row.title), publisher: String(row.publisher),
+      publishedAt: row.published_at ? String(row.published_at) : null, originalUrl: row.original_url ? String(row.original_url) : null,
+    })))
   }
 
   createFact(companyId: string, input: FactInput): string {
