@@ -373,6 +373,17 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX captable_positions_snapshot_idx ON captable_positions(captable_snapshot_id, rank);
     `,
   },
+  {
+    version: 8,
+    name: 'natural_keys_for_temporal_imports',
+    sql: `
+      CREATE UNIQUE INDEX role_assignments_natural_key_idx
+        ON role_assignments(company_id, person_id, position_id, start_date, ifnull(end_date, ''));
+      DROP INDEX captable_snapshots_company_date_idx;
+      CREATE UNIQUE INDEX captable_snapshots_company_date_idx
+        ON captable_snapshots(company_id, as_of_date);
+    `,
+  },
 ]
 
 export function migrateDatabase(database: DatabaseSync): void {

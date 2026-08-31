@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { MetricPack } from './types.js'
 
-export function applyMetricPack(database: DatabaseSync, pack: MetricPack): void {
+export function applyMetricPack(database: DatabaseSync, pack: MetricPack, options: { transaction?: boolean } = {}): void {
+  const transaction = options.transaction ?? true
   const now = new Date().toISOString()
   const insert = database.prepare(`INSERT INTO metric_definitions (
     metric_id, namespace, name, label_zh, label_en, category, value_type,
@@ -15,7 +16,7 @@ export function applyMetricPack(database: DatabaseSync, pack: MetricPack): void 
   WHERE metric_definitions.origin_pack_id = excluded.origin_pack_id
     AND metric_definitions.origin_pack_version = excluded.origin_pack_version`)
 
-  database.exec('BEGIN IMMEDIATE')
+  if (transaction) database.exec('BEGIN IMMEDIATE')
   try {
     for (const metric of pack.metrics) {
       insert.run(
@@ -25,10 +26,9 @@ export function applyMetricPack(database: DatabaseSync, pack: MetricPack): void 
         metric.origin_pack_version, JSON.stringify(metric.allowed_dimensions), now, now,
       )
     }
-    database.exec('COMMIT')
+    if (transaction) database.exec('COMMIT')
   } catch (error) {
-    database.exec('ROLLBACK')
+    if (transaction) database.exec('ROLLBACK')
     throw error
   }
 }
-

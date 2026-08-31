@@ -29,6 +29,8 @@
     ,"normalize:legacy-periods": "node --env-file-if-exists=.env --import tsx scripts/normalize-legacy-periods.ts"
     ,"refresh:legacy-mappings": "node --env-file-if-exists=.env --import tsx scripts/refresh-legacy-mappings.ts"
     ,"import:estimates": "node --env-file-if-exists=.env --import tsx scripts/import-estimates.ts"
+    ,"import:management": "node --env-file-if-exists=.env --import tsx scripts/import-management.ts"
+    ,"import:cap-table": "node --env-file-if-exists=.env --import tsx scripts/import-cap-table.ts"
   },
   "engines": {
     "node": ">=22.5"

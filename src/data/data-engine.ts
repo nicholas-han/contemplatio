@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type { EquityArchive } from '../archive/archive-service.js'
+import { applyMetricPack as applyMetricPackToDatabase } from '../metric-packs/apply.js'
+import type { MetricPack } from '../metric-packs/types.js'
 
 export interface FactInput {
   metricId: string
@@ -77,17 +79,28 @@ export interface EvidenceRecord {
 
 export interface PersonRecord { personId: string; nameZh: string | null; nameEn: string | null; birthYear: number | null; biography: string | null }
 export interface PositionRecord { positionId: string; roleType: string | null; roleTitleRaw: string; positionNameNormalized: string | null; organizationUnitId: string | null }
-export interface RoleAssignmentRecord { assignmentId: string; personId: string; positionId: string; startDate: string; endDate: string | null; isCurrent: boolean }
+export interface RoleAssignmentRecord { assignmentId: string; personId: string; positionId: string; startDate: string; endDate: string | null; isCurrent: boolean; position?: PositionRecord }
 export interface ReportingLineRecord { reportingLineId: string; subordinatePositionId: string; managerPositionId: string; relationshipType: 'solid' | 'dotted'; startDate: string; endDate: string | null }
 export interface ShareClassRecord { shareClassId: string; name: string; securityType: string; exchange: string | null; ticker: string | null; currency: string | null }
 export interface CapTableSnapshotRecord { snapshotId: string; asOfDate: string; shareClasses: Array<ShareClassRecord & { sharesOutstanding: number; percentageOfTotalEquity: number | null }>; positions: Array<{ holderName: string; holderId: string | null; shareClassId: string; shares: number | null; ownershipPct: number | null; rank: number | null }> }
 export interface SourceRecord { sourceId: string; sourceType: string; title: string; publisher: string; publishedAt: string | null; originalUrl: string | null }
+export interface ArtifactRecord { artifactId: string; sourceId: string; artifactKind: string; mediaType: string; localPath: string; sha256: string; originalRetained: boolean; transformationMethod: string | null }
+export interface OrganizationUnitRecord { organizationUnitId: string; name: string; unitType: string; parentUnitId: string | null }
+export interface MetricDefinitionRecord { metricId: string; namespace: string; name: string; labelZh: string | null; labelEn: string | null; category: string; valueType: string; canonicalUnit: string | null; periodBehavior: string; aggregationRule: string | null; originPackId: string; originPackVersion: string; allowedDimensions: string[] }
 
 export interface FactFilter {
   metricId?: string
   category?: 'financial' | 'operating'
   periodStartFrom?: string
   periodEndTo?: string
+  limit?: number
+}
+
+export interface EstimateFilter {
+  metricId?: string
+  targetPeriodEnd?: string
+  asOfFrom?: string
+  asOfTo?: string
   limit?: number
 }
 
@@ -120,6 +133,63 @@ export interface BusinessLineInput {
 export class EquityDataEngine {
   constructor(readonly archive: EquityArchive) {}
 
+  async listCompanies(): Promise<Awaited<ReturnType<EquityArchive['listCompanies']>>> {
+    return this.archive.listCompanies()
+  }
+
+  async getCompany(companyId: string): Promise<Awaited<ReturnType<EquityArchive['openCompany']>>['manifest']> {
+    return (await this.archive.openCompany(companyId)).manifest
+  }
+
+  listMetricDefinitions(companyId: string, category?: 'financial' | 'operating'): MetricDefinitionRecord[] {
+    return this.archive.withDatabase(companyId, (database) => {
+      const rows = category
+        ? database.prepare('SELECT * FROM metric_definitions WHERE active = 1 AND category = ? ORDER BY metric_id').all(category)
+        : database.prepare('SELECT * FROM metric_definitions WHERE active = 1 ORDER BY metric_id').all()
+      return (rows as Array<Record<string, unknown>>).map((row) => ({
+        metricId: String(row.metric_id), namespace: String(row.namespace), name: String(row.name),
+        labelZh: row.label_zh ? String(row.label_zh) : null, labelEn: row.label_en ? String(row.label_en) : null,
+        category: String(row.category), valueType: String(row.value_type), canonicalUnit: row.canonical_unit ? String(row.canonical_unit) : null,
+        periodBehavior: String(row.period_behavior), aggregationRule: row.aggregation_rule ? String(row.aggregation_rule) : null,
+        originPackId: String(row.origin_pack_id), originPackVersion: String(row.origin_pack_version),
+        allowedDimensions: JSON.parse(String(row.allowed_dimensions_json)) as string[],
+      }))
+    })
+  }
+
+  listOrganizationUnits(companyId: string): OrganizationUnitRecord[] {
+    return this.archive.withDatabase(companyId, (database) => (database.prepare('SELECT organization_unit_id, name, unit_type, parent_unit_id FROM organization_units WHERE company_id = ? AND active = 1 ORDER BY name, organization_unit_id').all(companyId) as Array<Record<string, unknown>>).map((row) => ({
+      organizationUnitId: String(row.organization_unit_id), name: String(row.name), unitType: String(row.unit_type), parentUnitId: row.parent_unit_id ? String(row.parent_unit_id) : null,
+    })))
+  }
+
+  listPositions(companyId: string): PositionRecord[] {
+    return this.archive.withDatabase(companyId, (database) => (database.prepare('SELECT position_id, role_type, role_title_raw, position_name_normalized, organization_unit_id FROM positions WHERE company_id = ? ORDER BY role_title_raw, position_id').all(companyId) as Array<Record<string, unknown>>).map((row) => ({
+      positionId: String(row.position_id), roleType: row.role_type ? String(row.role_type) : null, roleTitleRaw: String(row.role_title_raw),
+      positionNameNormalized: row.position_name_normalized ? String(row.position_name_normalized) : null, organizationUnitId: row.organization_unit_id ? String(row.organization_unit_id) : null,
+    })))
+  }
+
+  applyMetricPack(companyId: string, pack: MetricPack, companyIndustryId?: string | undefined): string {
+    return this.archive.withDatabase(companyId, (database) => {
+      assertCompany(database, companyId)
+      if (companyIndustryId) assertCompanyIndustry(database, companyId, companyIndustryId)
+      const applicationId = `metric-pack-application-${randomUUID()}`
+      const now = new Date().toISOString()
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        applyMetricPackToDatabase(database, pack, { transaction: false })
+        database.prepare(`INSERT INTO template_applications (
+          application_id, template_type, metric_pack_id, metric_pack_version, company_industry_id, applied_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`).run(
+          applicationId, 'metric_pack', pack.id, pack.version, companyIndustryId ?? null, now,
+        )
+        database.exec('COMMIT')
+      } catch (error) { database.exec('ROLLBACK'); throw error }
+      return applicationId
+    })
+  }
+
   listFacts(companyId: string, filter: FactFilter = {}): FactRecord[] {
     return this.archive.withDatabase(companyId, (database) => {
       const clauses = ['1 = 1']
@@ -128,7 +198,7 @@ export class EquityDataEngine {
       if (filter.category) { clauses.push('m.category = ?'); parameters.push(filter.category) }
       if (filter.periodStartFrom) { clauses.push('(f.period_start >= ? OR (f.period_start IS NULL AND f.period_end >= ?))'); parameters.push(filter.periodStartFrom, filter.periodStartFrom) }
       if (filter.periodEndTo) { clauses.push('f.period_end <= ?'); parameters.push(filter.periodEndTo) }
-      const limit = Math.max(1, Math.min(filter.limit ?? 500, 5000))
+      const limit = boundedLimit(filter.limit)
       parameters.push(limit)
       const rows = database.prepare(`SELECT f.fact_id, f.metric_id, f.period_type, f.period_start, f.period_end,
           f.value_number, f.value_text, f.value_boolean, f.unit, f.dimensions_json, f.verification_status
@@ -147,11 +217,17 @@ export class EquityDataEngine {
     })
   }
 
-  listEstimates(companyId: string, metricId?: string): EstimateRecord[] {
+  listEstimates(companyId: string, filter: string | EstimateFilter = {}): EstimateRecord[] {
     return this.archive.withDatabase(companyId, (database) => {
-      const rows = metricId
-        ? database.prepare('SELECT * FROM estimates WHERE metric_id = ? ORDER BY target_period_end, as_of, estimate_id').all(metricId)
-        : database.prepare('SELECT * FROM estimates ORDER BY target_period_end, as_of, estimate_id').all()
+      const normalized: EstimateFilter = typeof filter === 'string' ? { metricId: filter } : filter
+      const clauses = ['1 = 1']; const parameters: Array<string | number> = []
+      if (normalized.metricId) { clauses.push('metric_id = ?'); parameters.push(normalized.metricId) }
+      if (normalized.targetPeriodEnd) { validateDate(normalized.targetPeriodEnd, 'targetPeriodEnd'); clauses.push('target_period_end = ?'); parameters.push(normalized.targetPeriodEnd) }
+      if (normalized.asOfFrom) { validateDate(normalized.asOfFrom, 'asOfFrom'); clauses.push('as_of >= ?'); parameters.push(normalized.asOfFrom) }
+      if (normalized.asOfTo) { validateDate(normalized.asOfTo, 'asOfTo'); clauses.push('as_of <= ?'); parameters.push(normalized.asOfTo) }
+      if (normalized.asOfFrom && normalized.asOfTo && normalized.asOfFrom > normalized.asOfTo) throw new Error('asOfFrom must not be after asOfTo')
+      parameters.push(boundedLimit(normalized.limit))
+      const rows = database.prepare(`SELECT * FROM estimates WHERE ${clauses.join(' AND ')} ORDER BY target_period_end, as_of, estimate_id LIMIT ?`).all(...parameters)
       return (rows as Array<Record<string, unknown>>).map(toEstimateRecord)
     })
   }
@@ -268,7 +344,10 @@ export class EquityDataEngine {
   listPeople(companyId: string): Array<PersonRecord & { assignments: RoleAssignmentRecord[] }> {
     return this.archive.withDatabase(companyId, (database) => {
       const people = database.prepare('SELECT person_id, name_zh, name_en, birth_year, biography FROM people ORDER BY person_id').all() as Array<Record<string, unknown>>
-      const assignments = database.prepare('SELECT assignment_id, person_id, position_id, start_date, end_date, is_current FROM role_assignments ORDER BY start_date, assignment_id').all() as Array<Record<string, unknown>>
+      const assignments = database.prepare(`SELECT ra.assignment_id, ra.person_id, ra.position_id, ra.start_date, ra.end_date, ra.is_current,
+          p.role_type, p.role_title_raw, p.position_name_normalized, p.organization_unit_id
+        FROM role_assignments ra JOIN positions p ON p.position_id = ra.position_id
+        WHERE ra.company_id = ? ORDER BY ra.start_date, ra.assignment_id`).all(companyId) as Array<Record<string, unknown>>
       return people.map((person) => ({
         personId: String(person.person_id), nameZh: person.name_zh ? String(person.name_zh) : null,
         nameEn: person.name_en ? String(person.name_en) : null, birthYear: person.birth_year === null ? null : Number(person.birth_year),
@@ -278,7 +357,15 @@ export class EquityDataEngine {
     })
   }
 
-  createPerson(companyId: string, input: { nameZh?: string; nameEn?: string; birthYear?: number; biography?: string }): string {
+  listReportingLines(companyId: string): ReportingLineRecord[] {
+    return this.archive.withDatabase(companyId, (database) => (database.prepare(`SELECT reporting_line_id, subordinate_position_id, manager_position_id,
+      relationship_type, start_date, end_date FROM reporting_lines WHERE company_id = ? ORDER BY start_date, reporting_line_id`).all(companyId) as Array<Record<string, unknown>>).map((row) => ({
+      reportingLineId: String(row.reporting_line_id), subordinatePositionId: String(row.subordinate_position_id), managerPositionId: String(row.manager_position_id),
+      relationshipType: row.relationship_type as ReportingLineRecord['relationshipType'], startDate: String(row.start_date), endDate: row.end_date ? String(row.end_date) : null,
+    })))
+  }
+
+  createPerson(companyId: string, input: { nameZh?: string | undefined; nameEn?: string | undefined; birthYear?: number | undefined; biography?: string | undefined }): string {
     if (!input.nameZh?.trim() && !input.nameEn?.trim()) throw new Error('person requires nameZh or nameEn')
     return this.archive.withDatabase(companyId, (database) => {
       assertCompany(database, companyId)
@@ -288,7 +375,7 @@ export class EquityDataEngine {
     })
   }
 
-  createPosition(companyId: string, input: { roleTitleRaw: string; roleType?: string; positionNameNormalized?: string; organizationUnitId?: string }): string {
+  createPosition(companyId: string, input: { roleTitleRaw: string; roleType?: string | undefined; positionNameNormalized?: string | undefined; organizationUnitId?: string | undefined }): string {
     if (!input.roleTitleRaw.trim()) throw new Error('position requires roleTitleRaw')
     return this.archive.withDatabase(companyId, (database) => {
       assertCompany(database, companyId)
@@ -299,7 +386,7 @@ export class EquityDataEngine {
     })
   }
 
-  createOrganizationUnit(companyId: string, input: { name: string; unitType: string; parentUnitId?: string }): string {
+  createOrganizationUnit(companyId: string, input: { name: string; unitType: string; parentUnitId?: string | undefined }): string {
     if (!input.name.trim() || !input.unitType.trim()) throw new Error('organization unit requires name and unitType')
     return this.archive.withDatabase(companyId, (database) => {
       assertCompany(database, companyId)
@@ -310,7 +397,7 @@ export class EquityDataEngine {
     })
   }
 
-  assignRole(companyId: string, input: { personId: string; positionId: string; startDate: string; endDate?: string; isCurrent?: boolean; sourceId?: string; evidenceId?: string }): string {
+  assignRole(companyId: string, input: { personId: string; positionId: string; startDate: string; endDate?: string | undefined; isCurrent?: boolean | undefined; sourceId?: string | undefined; evidenceId?: string | undefined }): string {
     validateDate(input.startDate, 'startDate'); if (input.endDate) validateDate(input.endDate, 'endDate')
     if (input.endDate && input.startDate > input.endDate) throw new Error('startDate must not be after endDate')
     return this.archive.withDatabase(companyId, (database) => {
@@ -335,7 +422,7 @@ export class EquityDataEngine {
     })
   }
 
-  createShareClass(companyId: string, input: { name: string; securityType: string; exchange?: string; ticker?: string; currency?: string }): string {
+  createShareClass(companyId: string, input: { name: string; securityType: string; exchange?: string | undefined; ticker?: string | undefined; currency?: string | undefined }): string {
     if (!input.name.trim() || !input.securityType.trim()) throw new Error('share class requires name and securityType')
     return this.archive.withDatabase(companyId, (database) => {
       assertCompany(database, companyId)
@@ -345,7 +432,7 @@ export class EquityDataEngine {
     })
   }
 
-  createCapTableSnapshot(companyId: string, input: { asOfDate: string; sourceId?: string; evidenceId?: string; classTotals: Array<{ shareClassId: string; sharesOutstanding: number; percentageOfTotalEquity?: number }>; positions?: Array<{ holderName: string; holderId?: string; shareClassId: string; shares?: number; ownershipPct?: number; rank?: number }> }): string {
+  createCapTableSnapshot(companyId: string, input: { asOfDate: string; sourceId?: string | undefined; evidenceId?: string | undefined; classTotals: Array<{ shareClassId: string; sharesOutstanding: number; percentageOfTotalEquity?: number | undefined }>; positions?: Array<{ holderName: string; holderId?: string | undefined; shareClassId: string; shares?: number | undefined; ownershipPct?: number | undefined; rank?: number | undefined }> }): string {
     validateDate(input.asOfDate, 'asOfDate')
     if (!input.classTotals.length) throw new Error('cap table snapshot requires class totals')
     return this.archive.withDatabase(companyId, (database) => {
@@ -378,10 +465,25 @@ export class EquityDataEngine {
     })
   }
 
+  listShareClasses(companyId: string): ShareClassRecord[] {
+    return this.archive.withDatabase(companyId, (database) => (database.prepare('SELECT share_class_id, name, security_type, exchange, ticker, currency FROM share_classes WHERE company_id = ? AND active = 1 ORDER BY name, share_class_id').all(companyId) as Array<Record<string, unknown>>).map((row) => ({
+      shareClassId: String(row.share_class_id), name: String(row.name), securityType: String(row.security_type), exchange: row.exchange ? String(row.exchange) : null,
+      ticker: row.ticker ? String(row.ticker) : null, currency: row.currency ? String(row.currency) : null,
+    })))
+  }
+
   listSources(companyId: string): SourceRecord[] {
     return this.archive.withDatabase(companyId, (database) => (database.prepare('SELECT source_id, source_type, title, publisher, published_at, original_url FROM sources ORDER BY published_at DESC, source_id').all() as Array<Record<string, unknown>>).map((row) => ({
       sourceId: String(row.source_id), sourceType: String(row.source_type), title: String(row.title), publisher: String(row.publisher),
       publishedAt: row.published_at ? String(row.published_at) : null, originalUrl: row.original_url ? String(row.original_url) : null,
+    })))
+  }
+
+  listArtifacts(companyId: string): ArtifactRecord[] {
+    return this.archive.withDatabase(companyId, (database) => (database.prepare(`SELECT artifact_id, source_id, artifact_kind, media_type, local_path, sha256,
+      original_retained, transformation_method FROM source_artifacts ORDER BY created_at, artifact_id`).all() as Array<Record<string, unknown>>).map((row) => ({
+      artifactId: String(row.artifact_id), sourceId: String(row.source_id), artifactKind: String(row.artifact_kind), mediaType: String(row.media_type),
+      localPath: String(row.local_path), sha256: String(row.sha256), originalRetained: Boolean(row.original_retained), transformationMethod: row.transformation_method ? String(row.transformation_method) : null,
     })))
   }
 
@@ -498,6 +600,12 @@ function validateDate(value: string, field: string): void {
   }
 }
 
+function boundedLimit(value: number | undefined): number {
+  if (value === undefined) return 500
+  if (!Number.isInteger(value) || value < 1) throw new Error('limit must be a positive integer')
+  return Math.min(value, 5000)
+}
+
 function validateEstimateShape(input: EstimateInput): void {
   validateDate(input.targetPeriodEnd, 'targetPeriodEnd'); validateDate(input.asOf, 'asOf')
   if (input.targetPeriodType === 'duration') {
@@ -553,5 +661,14 @@ function toEstimateRecord(row: Record<string, unknown>): EstimateRecord {
 }
 
 function toAssignmentRecord(row: Record<string, unknown>): RoleAssignmentRecord {
-  return { assignmentId: String(row.assignment_id), personId: String(row.person_id), positionId: String(row.position_id), startDate: String(row.start_date), endDate: row.end_date ? String(row.end_date) : null, isCurrent: Boolean(row.is_current) }
+  const position = row.role_title_raw ? {
+    positionId: String(row.position_id), roleType: row.role_type ? String(row.role_type) : null,
+    roleTitleRaw: String(row.role_title_raw), positionNameNormalized: row.position_name_normalized ? String(row.position_name_normalized) : null,
+    organizationUnitId: row.organization_unit_id ? String(row.organization_unit_id) : null,
+  } satisfies PositionRecord : undefined
+  return {
+    assignmentId: String(row.assignment_id), personId: String(row.person_id), positionId: String(row.position_id),
+    startDate: String(row.start_date), endDate: row.end_date ? String(row.end_date) : null, isCurrent: Boolean(row.is_current),
+    ...(position ? { position } : {}),
+  }
 }

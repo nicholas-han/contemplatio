@@ -1,6 +1,6 @@
 # Contemplatio: Equity Research
 
-Local-first, company-centric equity research for DeepSeek Harness / Cordis. The current implementation covers the v0.1 bootstrap slice: portable company workspaces, manifest validation, SQLite migrations, retained artifacts, SHA-256 integrity, provenance tables, and minimal financial/coal metric packs.
+Local-first, company-centric equity research for DeepSeek Harness / Cordis. The current implementation covers the v0.1 bootstrap slice: portable company workspaces, manifest validation, SQLite migrations, retained artifacts, SHA-256 integrity, provenance tables, reusable metric packs, point-in-time estimates, management history, cap table snapshots, valuation models, and a local inspection UI.
 
 ## Requirements
 
@@ -112,3 +112,29 @@ npm run import:estimates -- --file=/path/to/estimates.csv --apply
 ```
 
 Use semicolon-separated values for multiple Evidence IDs or dimensions, for example `evidence-a;evidence-b` and `geography=China;scenario=base`.
+
+Import management history from CSV (`name_zh` or `name_en`, `role_title_raw`, and `start_date` are required):
+
+```sh
+npm run import:management -- --file=/path/to/management.csv
+npm run import:management -- --file=/path/to/management.csv --company=yankuang-energy --apply
+```
+
+Import cap table snapshots from CSV (`as_of_date`, `share_class_name`, `security_type`, and `shares_outstanding` are required):
+
+```sh
+npm run import:cap-table -- --file=/path/to/cap-table.csv
+npm run import:cap-table -- --file=/path/to/cap-table.csv --company=yankuang-energy --apply
+```
+
+Both management and cap table imports support a dry-run by default. Re-running an already applied file reuses matching people, positions, and share classes; snapshots with an existing `as_of_date` are skipped and reported as `skippedSnapshots`.
+
+Start the local workbench against the staging workspace (the default `.env` in this checkout points at the configured Dropbox archive and uses `.conte-staging` as the writable target):
+
+```sh
+npm run web:dev
+```
+
+Open `http://127.0.0.1:4173/` for the default company, or `/companies/<company_id>` for another workspace. The same data services are available as JSON routes, including `/api/companies`, `/api/facts`, `/api/estimates`, `/api/metrics`, `/api/people`, `/api/reporting-lines`, `/api/cap-table`, `/api/sources`, `/api/artifacts`, and the three CSV import endpoints.
+
+The model plugin publishes both the callable `equityResearchTools` service and validated `equityResearchToolDefinitions` through Cordis reflection for Harness integration. Tool methods operate through the Data Engine and Model Engine; they do not expose SQLite or filesystem primitives.

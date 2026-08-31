@@ -15,6 +15,10 @@ import { EquityDataEngine } from '../src/data/data-engine.js'
 import { EquityModelEngine, runCoalScenario } from '../src/model-engine/service.js'
 import { runBankPbRoe, runInsurancePEv, runSotp } from '../src/model-engine/service.js'
 import { createEquityResearchTools } from '../src/tools/research-tools.js'
+import { importManagementCsvText, parseManagementCsv } from '../src/import/management.js'
+import { importCapTableCsvText, parseCapTableCsv } from '../src/import/cap-table.js'
+import { parseEstimatesCsv } from '../src/import/estimates.js'
+import { researchToolDefinitions } from '../src/tools/schema.js'
 
 const manifest: CompanyManifest = {
   schema_version: '0.1',
@@ -52,6 +56,7 @@ test('model plugin provides high-level research tools', async () => {
   await archivePlugin.apply(ctx, { root })
   modelPlugin.apply(ctx, {})
   assert.equal(typeof ctx.reflect.get('equityResearchTools')?.getEstimates, 'function')
+  assert.ok((ctx.reflect.get('equityResearchToolDefinitions') as typeof researchToolDefinitions).some((tool) => tool.name === 'runSotp'))
 })
 
 test('company initialization creates an inspectable workspace and applies migrations once', async () => {
@@ -67,13 +72,13 @@ test('company initialization creates an inspectable workspace and applies migrat
     const tables = database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type = 'table'").get() as { count: number }
     return { migrations: migrations.count, tables: tables.count }
   })
-  assert.equal(result.migrations, 7)
+  assert.equal(result.migrations, 8)
   assert.ok(result.tables >= 8)
 
   await archive.openCompany(manifest.company_id)
   assert.equal(archive.withDatabase(manifest.company_id, (database) =>
     (database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count,
-  ), 7)
+  ), 8)
 })
 
 test('retained artifact provenance remains valid after copying a company workspace', async () => {
@@ -180,12 +185,17 @@ test('data engine validates and queries facts through the archive boundary', asy
     )
   })
   const engine = new EquityDataEngine(archive)
+  const packApplicationId = engine.applyMetricPack(manifest.company_id, financialCommonPack)
+  assert.match(packApplicationId, /^metric-pack-application-/)
+  assert.ok(engine.listMetricDefinitions(manifest.company_id, 'financial').some((metric) => metric.metricId === 'financial.revenue'))
   const factId = engine.createFact(manifest.company_id, {
     metricId: 'coal.production', periodType: 'duration', periodStart: '2025-01-01', periodEnd: '2025-12-31',
     value: 10, unit: 'tonne', dimensions: { geography: 'Shandong' }, evidenceIds: ['evidence-fact'],
     ingestionMethod: 'test', verificationStatus: 'confirmed',
   })
   assert.equal(engine.getFact(manifest.company_id, factId).value, 10)
+  assert.equal(engine.listArtifacts(manifest.company_id)[0]?.artifactId, artifact.artifactId)
+  assert.throws(() => engine.listFacts(manifest.company_id, { limit: 0 }), /positive integer/)
   assert.equal(engine.listFacts(manifest.company_id, { metricId: 'coal.production' }).length, 1)
   const firstEstimate = engine.createEstimate(manifest.company_id, {
     metricId: 'coal.production', targetPeriodType: 'duration', targetPeriodStart: '2026-01-01', targetPeriodEnd: '2026-12-31',
@@ -201,6 +211,7 @@ test('data engine validates and queries facts through the archive boundary', asy
   assert.equal(estimates.length, 2)
   assert.equal(estimates[0]?.estimateId, firstEstimate)
   assert.equal(estimates[1]?.value, 13)
+  assert.equal(engine.listEstimates(manifest.company_id, { targetPeriodEnd: '2026-12-31', asOfFrom: '2026-07-01', asOfTo: '2026-07-31' }).length, 1)
   const personId = engine.createPerson(manifest.company_id, { nameEn: 'Test Executive' })
   const unitId = engine.createOrganizationUnit(manifest.company_id, { name: 'Group Management', unitType: 'management' })
   const positionId = engine.createPosition(manifest.company_id, { roleTitleRaw: 'Chief Executive Officer', roleType: 'ceo', organizationUnitId: unitId })
@@ -236,4 +247,34 @@ test('coal model calculates and persists historical model runs', async () => {
   assert.ok(bank.justifiedPb > 1)
   assert.equal(runInsurancePEv({ embeddedValue: 100, targetPEv: 1.2, netDebt: 20, sharesOutstanding: 10 }).valuePerShare, 10)
   assert.equal(runSotp([{ name: 'Coal', value: 100 }, { name: 'Bank', value: 50, weight: 0.5 }], -10).adjustedValue, 115)
+})
+
+test('management and cap table CSV parsers preserve temporal input', () => {
+  const management = parseManagementCsv('name_en,role_title_raw,start_date,is_current\nAlice,CFO,2024-01-01,true')
+  assert.equal(management[0]?.roleTitleRaw, 'CFO')
+  const capTable = parseCapTableCsv('as_of_date,share_class_name,security_type,shares_outstanding,holder_name,shares\n2025-12-31,A shares,common_equity,1000,Holder,100')
+  assert.equal(capTable[0]?.shares, 100)
+  assert.throws(() => parseManagementCsv('name_en,role_title_raw,start_date\nAlice,CFO,2024-02-30'), /ISO date/)
+  assert.throws(() => parseCapTableCsv('as_of_date,share_class_name,security_type,shares_outstanding\n2025-13-31,A,common_equity,1'), /ISO date/)
+  assert.throws(() => parseEstimatesCsv('metric_id,target_period_type,target_period_end,as_of,provider,estimate_type,value,evidence_id\ncoal.production,duration,2026-12-31,2026-07-01,Desk,base,1,evidence'), /target_period_start/)
+  assert.ok(researchToolDefinitions.some((tool) => tool.name === 'getCapTable'))
+})
+
+test('domain imports are idempotent for repeated management and cap table files', async () => {
+  const { archive } = await createArchive()
+  await archive.createCompany(manifest)
+  const managementCsv = 'name_en,unit_name,unit_type,role_title_raw,role_type,start_date,is_current\nAlice Chen,Executive Office,management,Chief Financial Officer,cfo,2024-01-01,true'
+  const firstManagement = importManagementCsvText(managementCsv, archive, manifest.company_id, true)
+  const secondManagement = importManagementCsvText(managementCsv, archive, manifest.company_id, true)
+  assert.equal(firstManagement.imported, 1)
+  assert.equal(secondManagement.imported, 1)
+  assert.equal(archive.withDatabase(manifest.company_id, (database) => (database.prepare('SELECT count(*) AS count FROM people').get() as { count: number }).count), 1)
+  assert.equal(archive.withDatabase(manifest.company_id, (database) => (database.prepare('SELECT count(*) AS count FROM role_assignments').get() as { count: number }).count), 1)
+  const capTableCsv = 'as_of_date,share_class_name,security_type,exchange,ticker,shares_outstanding,holder_name,shares\n2025-12-31,A shares,common_equity,SSE,600188,1000,State Capital,100'
+  const firstCapTable = importCapTableCsvText(capTableCsv, archive, manifest.company_id, true)
+  const secondCapTable = importCapTableCsvText(capTableCsv, archive, manifest.company_id, true)
+  assert.equal(firstCapTable.snapshotIds.length, 1)
+  assert.equal(secondCapTable.snapshotIds.length, 0)
+  assert.equal(secondCapTable.skippedSnapshots, 1)
+  assert.equal(archive.withDatabase(manifest.company_id, (database) => (database.prepare('SELECT count(*) AS count FROM captable_snapshots').get() as { count: number }).count), 1)
 })
