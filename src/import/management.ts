@@ -24,17 +24,16 @@ function importManagementRows(rows: ManagementCsvRow[], archive: EquityArchive, 
   const engine = new EquityDataEngine(archive)
   const people = new Map<string, string>(), units = new Map<string, string>(), positions = new Map<string, string>(), existingAssignments = new Map<string, string>()
   for (const person of engine.listPeople(companyId)) {
-    const key = `${normalize(person.nameZh)}|${normalize(person.nameEn)}`
-    if (key !== '|') people.set(key, person.personId)
+    for (const key of personAliases(person.nameZh, person.nameEn)) people.set(key, person.personId)
     for (const assignment of person.assignments) existingAssignments.set(`${person.personId}|${assignment.positionId}|${assignment.startDate}|${assignment.endDate ?? ''}`, assignment.assignmentId)
   }
   for (const unit of engine.listOrganizationUnits(companyId)) units.set(normalize(unit.name), unit.organizationUnitId)
   for (const position of engine.listPositions(companyId)) positions.set(`${normalize(position.roleTitleRaw)}|${normalize(position.roleType)}|${position.organizationUnitId ?? ''}`, position.positionId)
   const assignments: string[] = []
   for (const row of rows) {
-    const personKey = `${normalize(row.nameZh)}|${normalize(row.nameEn)}`
-    let personId = people.get(personKey)
-    if (!personId) { personId = engine.createPerson(companyId, { nameZh: row.nameZh, nameEn: row.nameEn, birthYear: row.birthYear, biography: row.biography }); people.set(personKey, personId) }
+    const personKeys = personAliases(row.nameZh, row.nameEn)
+    let personId = personKeys.map((key) => people.get(key)).find((id): id is string => Boolean(id))
+    if (!personId) { personId = engine.createPerson(companyId, { nameZh: row.nameZh, nameEn: row.nameEn, birthYear: row.birthYear, biography: row.biography }); for (const key of personKeys) people.set(key, personId) }
     let unitId: string | undefined
     if (row.unitName) { const unitKey = normalize(row.unitName); unitId = units.get(unitKey); if (!unitId) { unitId = engine.createOrganizationUnit(companyId, { name: row.unitName, unitType: row.unitType ?? 'department' }); units.set(unitKey, unitId) } }
     const positionKey = `${normalize(row.roleTitleRaw)}|${normalize(row.roleType)}|${unitId ?? ''}`
@@ -76,3 +75,7 @@ function validateIsoDate(value: string, field: string): void {
 }
 
 function normalize(value: string | null | undefined): string { return (value ?? '').trim().toLocaleLowerCase() }
+
+function personAliases(nameZh: string | null | undefined, nameEn: string | null | undefined): string[] {
+  return [nameZh, nameEn].map((name) => normalize(name)).filter(Boolean).map((name) => `name:${name}`)
+}

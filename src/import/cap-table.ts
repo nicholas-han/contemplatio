@@ -61,5 +61,7 @@ function validateIsoDate(value: string, field: string): void {
 }
 
 function shareClassKey(name: string, securityType: string, exchange: string | null, ticker: string | null, currency: string | null): string {
-  return [name, securityType, exchange ?? '', ticker ?? '', currency ?? ''].map((value) => value.trim().toLocaleLowerCase()).join('|')
+  // share_classes uses company + name as its domain identity, so metadata does not split one class.
+  void securityType; void exchange; void ticker; void currency
+  return name.trim().toLocaleLowerCase()
 }
