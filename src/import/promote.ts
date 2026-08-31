@@ -16,12 +16,12 @@ export interface BulkPromotionResult {
 export function planLegacyPromotions(archive: EquityArchive, observationIds?: string[]): PromotionPlan[] {
   return archive.withDatabase('yankuang-energy', (database) => {
     const rows = observationIds?.length
-      ? database.prepare(`SELECT observation_id, mapped_metric_id, review_status, period_kind, value, period_end, evidence_id, promoted_fact_id
+      ? database.prepare(`SELECT observation_id, mapped_metric_id, review_status, period_kind, period_start, value, period_end, evidence_id, promoted_fact_id
           FROM legacy_observations WHERE observation_id IN (${observationIds.map(() => '?').join(',')})`).all(...observationIds)
-      : database.prepare(`SELECT observation_id, mapped_metric_id, review_status, period_kind, value, period_end, evidence_id, promoted_fact_id
+      : database.prepare(`SELECT observation_id, mapped_metric_id, review_status, period_kind, period_start, value, period_end, evidence_id, promoted_fact_id
           FROM legacy_observations WHERE promoted_fact_id IS NULL ORDER BY observation_id`).all()
     return (rows as Array<{
-      observation_id: string; mapped_metric_id: string | null; review_status: string; period_kind: string;
+      observation_id: string; mapped_metric_id: string | null; review_status: string; period_kind: string; period_start: string | null;
       value: string | null; period_end: string | null; evidence_id: string | null; promoted_fact_id: string | null
     }>).map((row) => {
       let reason: string | undefined
@@ -29,6 +29,8 @@ export function planLegacyPromotions(archive: EquityArchive, observationIds?: st
       else if (!row.mapped_metric_id) reason = 'no mapped metric definition'
       else if (!['confirmed', 'verified'].includes(row.review_status)) reason = `review status is ${row.review_status}`
       else if (!['duration', 'instant'].includes(row.period_kind)) reason = `period kind ${row.period_kind} is not an actual fact`
+      else if (row.period_kind === 'duration' && !row.period_start) reason = 'duration facts require period_start'
+      else if (row.period_kind === 'instant' && row.period_start) reason = 'instant facts must not have period_start'
       else if (!row.value || Number.isNaN(Number(row.value))) reason = 'value is not a single numeric value'
       else if (!row.period_end) reason = 'period_end is required for a fact'
       else if (!row.evidence_id) reason = 'local Evidence is required'
@@ -48,9 +50,9 @@ export function promoteLegacyObservations(archive: EquityArchive, observationIds
   }
 
   return archive.withDatabase('yankuang-energy', (database) => {
-    const rows = database.prepare(`SELECT observation_id, mapped_metric_id, period_start, period_end, value, unit, dimensions_text,
+    const rows = database.prepare(`SELECT observation_id, mapped_metric_id, period_kind, period_start, period_end, value, unit, dimensions_text,
         evidence_id, imported_at FROM legacy_observations WHERE observation_id IN (${observationIds.map(() => '?').join(',')})`).all(...observationIds) as Array<{
-      observation_id: string; mapped_metric_id: string; period_start: string | null; period_end: string;
+      observation_id: string; mapped_metric_id: string; period_kind: string; period_start: string | null; period_end: string;
       value: string; unit: string | null; dimensions_text: string | null; evidence_id: string; imported_at: string
     }>
     const insert = database.prepare(`INSERT INTO facts (
@@ -65,7 +67,7 @@ export function promoteLegacyObservations(archive: EquityArchive, observationIds
       for (const row of rows) {
         const factId = `fact-${row.observation_id}`
         insert.run(
-          factId, row.mapped_metric_id, row.period_start ? 'duration' : 'instant', row.period_start,
+          factId, row.mapped_metric_id, row.period_kind as 'duration' | 'instant', row.period_start,
           row.period_end, Number(row.value), row.unit, dimensionsToJson(row.dimensions_text),
           'legacy_import_reviewed', 'confirmed', row.imported_at, now,
         )
@@ -95,6 +97,8 @@ export function bulkPromoteLegacyUnverified(archive: EquityArchive): BulkPromoti
       let reason: string | undefined
       if (!row.mapped_metric_id) reason = 'no mapped metric definition'
       else if (!['duration', 'instant'].includes(row.period_kind)) reason = `period kind ${row.period_kind} is not an actual fact`
+      else if (row.period_kind === 'duration' && !row.period_start) reason = 'duration facts require period_start'
+      else if (row.period_kind === 'instant' && row.period_start) reason = 'instant facts must not have period_start'
       else if (!row.value || Number.isNaN(Number(row.value))) reason = 'value is not a single numeric value'
       else if (!row.period_end) reason = 'period_end is required for a fact'
       else if (!row.evidence_id) reason = 'local Evidence is required'
@@ -113,7 +117,7 @@ export function bulkPromoteLegacyUnverified(archive: EquityArchive): BulkPromoti
       for (const row of promotable) {
         const factId = `fact-${row.observation_id}`
         insert.run(
-          factId, row.mapped_metric_id, row.period_start ? 'duration' : 'instant', row.period_start,
+          factId, row.mapped_metric_id, row.period_kind as 'duration' | 'instant', row.period_start,
           row.period_end, Number(row.value), row.unit, dimensionsToJson(row.dimensions_text),
           'legacy_import_unverified', 'legacy_unverified', row.imported_at, now,
         )

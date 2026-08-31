@@ -8,8 +8,8 @@ export function createEquityResearchTools(archive: EquityArchive) {
   const models = new EquityModelEngine(archive)
   return {
     getCompany: async (companyId: string) => (await archive.openCompany(companyId)).manifest,
-    getFinancials: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, factFilter(metricId, limit)),
-    getOperatingMetrics: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, factFilter(metricId, limit)),
+    getFinancials: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, { ...factFilter(metricId, limit), category: 'financial' }),
+    getOperatingMetrics: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, { ...factFilter(metricId, limit), category: 'operating' }),
     getEstimates: (companyId: string, metricId?: string) => data.listEstimates(companyId, metricId),
     getManagement: (companyId: string) => data.listPeople(companyId),
     getEvidence: (companyId: string, evidenceId: string) => data.getEvidence(companyId, evidenceId),

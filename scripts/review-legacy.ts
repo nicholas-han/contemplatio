@@ -28,8 +28,8 @@ if (!apply) {
 
 const reviewUpdate = {
   observationId,
-  mappedMetricId: metricArgument ?? null,
   reviewStatus: statusArgument as ReviewStatus,
+  ...(metricArgument !== undefined ? { mappedMetricId: metricArgument } : {}),
   ...(note ? { note } : {}),
 }
 reviewLegacyObservation(archive, reviewUpdate)

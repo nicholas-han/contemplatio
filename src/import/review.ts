@@ -31,11 +31,11 @@ export function reviewLegacyObservation(archive: EquityArchive, update: ReviewUp
     const notes = update.note
       ? [current.notes, `[review] ${update.note}`].filter(Boolean).join('\n')
       : current.notes
-    database.prepare(`UPDATE legacy_observations
-      SET mapped_metric_id = ?, review_status = ?, notes = ?
-      WHERE observation_id = ?`).run(
-      update.mappedMetricId ?? null, update.reviewStatus, notes, update.observationId,
-    )
+    if (update.mappedMetricId === undefined) {
+      database.prepare('UPDATE legacy_observations SET review_status = ?, notes = ? WHERE observation_id = ?').run(update.reviewStatus, notes, update.observationId)
+    } else {
+      database.prepare('UPDATE legacy_observations SET mapped_metric_id = ?, review_status = ?, notes = ? WHERE observation_id = ?').run(update.mappedMetricId, update.reviewStatus, notes, update.observationId)
+    }
   })
 }
 
@@ -48,4 +48,3 @@ export function getLegacyObservation(archive: EquityArchive, observationId: stri
     return row
   })
 }
-

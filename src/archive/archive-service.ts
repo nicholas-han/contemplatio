@@ -133,6 +133,11 @@ export class EquityArchive {
     const destination = join(this.companyPath(companyId), relativePath)
     await mkdir(dirname(destination), { recursive: true })
 
+    const existing = this.withDatabase(companyId, (database) => database.prepare(
+      'SELECT artifact_id FROM source_artifacts WHERE artifact_id = ?',
+    ).get(artifactId))
+    if (existing) throw new Error(`Artifact already exists: ${artifactId}`)
+
     if (typeof content === 'object' && 'sourcePath' in content) await copyFile(content.sourcePath, destination)
     else await writeFile(destination, content)
 

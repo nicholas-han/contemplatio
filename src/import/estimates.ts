@@ -34,7 +34,7 @@ function importEstimateRows(
 ): { filePath?: string; rows: number; imported: number; estimateIds: string[] } {
   if (!apply) return { ...(filePath ? { filePath } : {}), rows: rows.length, imported: 0, estimateIds: [] }
   const engine = new EquityDataEngine(archive)
-  const estimateIds = rows.map((row) => engine.createEstimate(companyId, row))
+  const estimateIds = engine.createEstimatesBatch(companyId, rows)
   return { ...(filePath ? { filePath } : {}), rows: rows.length, imported: estimateIds.length, estimateIds }
 }
 

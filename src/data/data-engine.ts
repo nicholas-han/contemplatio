@@ -82,6 +82,7 @@ export interface ReportingLineRecord { reportingLineId: string; subordinatePosit
 
 export interface FactFilter {
   metricId?: string
+  category?: 'financial' | 'operating'
   periodStartFrom?: string
   periodEndTo?: string
   limit?: number
@@ -120,14 +121,15 @@ export class EquityDataEngine {
     return this.archive.withDatabase(companyId, (database) => {
       const clauses = ['1 = 1']
       const parameters: Array<string | number> = []
-      if (filter.metricId) { clauses.push('metric_id = ?'); parameters.push(filter.metricId) }
-      if (filter.periodStartFrom) { clauses.push('(period_start IS NULL OR period_start >= ?)'); parameters.push(filter.periodStartFrom) }
-      if (filter.periodEndTo) { clauses.push('period_end <= ?'); parameters.push(filter.periodEndTo) }
+      if (filter.metricId) { clauses.push('f.metric_id = ?'); parameters.push(filter.metricId) }
+      if (filter.category) { clauses.push('m.category = ?'); parameters.push(filter.category) }
+      if (filter.periodStartFrom) { clauses.push('(f.period_start >= ? OR (f.period_start IS NULL AND f.period_end >= ?))'); parameters.push(filter.periodStartFrom, filter.periodStartFrom) }
+      if (filter.periodEndTo) { clauses.push('f.period_end <= ?'); parameters.push(filter.periodEndTo) }
       const limit = Math.max(1, Math.min(filter.limit ?? 500, 5000))
       parameters.push(limit)
-      const rows = database.prepare(`SELECT fact_id, metric_id, period_type, period_start, period_end,
-          value_number, value_text, value_boolean, unit, dimensions_json, verification_status
-        FROM facts WHERE ${clauses.join(' AND ')} ORDER BY period_end, fact_id LIMIT ?`).all(...parameters) as Array<Record<string, unknown>>
+      const rows = database.prepare(`SELECT f.fact_id, f.metric_id, f.period_type, f.period_start, f.period_end,
+          f.value_number, f.value_text, f.value_boolean, f.unit, f.dimensions_json, f.verification_status
+        FROM facts f JOIN metric_definitions m ON m.metric_id = f.metric_id WHERE ${clauses.join(' AND ')} ORDER BY f.period_end, f.fact_id LIMIT ?`).all(...parameters) as Array<Record<string, unknown>>
       return rows.map(toFactRecord)
     })
   }
@@ -164,10 +166,11 @@ export class EquityDataEngine {
     if (!input.evidenceIds.length) throw new Error('estimates require at least one local Evidence')
 
     return this.archive.withDatabase(companyId, (database) => {
-      const metric = database.prepare(`SELECT value_type, allowed_dimensions_json FROM metric_definitions WHERE metric_id = ? AND active = 1`).get(input.metricId) as {
-        value_type: 'number' | 'text' | 'boolean'; allowed_dimensions_json: string
+      const metric = database.prepare(`SELECT value_type, period_behavior, allowed_dimensions_json FROM metric_definitions WHERE metric_id = ? AND active = 1`).get(input.metricId) as {
+        value_type: 'number' | 'text' | 'boolean'; period_behavior: 'duration' | 'instant'; allowed_dimensions_json: string
       } | undefined
       if (!metric || metric.value_type === 'boolean') throw new Error(`Estimate metric must be an active number or text metric: ${input.metricId}`)
+      if (metric.period_behavior !== input.targetPeriodType) throw new Error(`Metric ${input.metricId} requires ${metric.period_behavior} estimate target period`)
       if (input.dimensions && Object.keys(input.dimensions).some((key) => !(JSON.parse(metric.allowed_dimensions_json) as string[]).includes(key))) {
         throw new Error(`Metric ${input.metricId} does not allow one or more dimensions`)
       }
@@ -196,6 +199,36 @@ export class EquityDataEngine {
         database.exec('COMMIT')
       } catch (error) { database.exec('ROLLBACK'); throw error }
       return estimateId
+    })
+  }
+
+  createEstimatesBatch(companyId: string, inputs: EstimateInput[]): string[] {
+    if (!inputs.length) return []
+    return this.archive.withDatabase(companyId, (database) => {
+      const prepared = inputs.map((input) => {
+        validateEstimateShape(input)
+        const metric = database.prepare('SELECT value_type, period_behavior, allowed_dimensions_json FROM metric_definitions WHERE metric_id = ? AND active = 1').get(input.metricId) as { value_type: 'number' | 'text' | 'boolean'; period_behavior: 'duration' | 'instant'; allowed_dimensions_json: string } | undefined
+        if (!metric || metric.value_type === 'boolean') throw new Error(`Estimate metric must be an active number or text metric: ${input.metricId}`)
+        if (metric.period_behavior !== input.targetPeriodType) throw new Error(`Metric ${input.metricId} requires ${metric.period_behavior} estimate target period`)
+        const allowed = JSON.parse(metric.allowed_dimensions_json) as string[]
+        if (input.dimensions && Object.keys(input.dimensions).some((key) => !allowed.includes(key))) throw new Error(`Metric ${input.metricId} does not allow one or more dimensions`)
+        if (metric.value_type === 'number' && (typeof input.value !== 'number' || !Number.isFinite(input.value))) throw new Error('Estimate value must be a finite number')
+        if (metric.value_type === 'text' && typeof input.value !== 'string') throw new Error('Estimate value must be text')
+        for (const evidenceId of input.evidenceIds) if (!database.prepare('SELECT evidence_id FROM evidence WHERE evidence_id = ?').get(evidenceId)) throw new Error(`Unknown Evidence: ${evidenceId}`)
+        return { input, id: `estimate-${randomUUID()}` }
+      })
+      const insert = database.prepare(`INSERT INTO estimates (estimate_id, metric_id, target_period_type, target_period_start, target_period_end, as_of, published_at, observed_at, provider, analyst, estimate_type, value_number, value_text, unit, dimensions_json, ingestion_method, verification_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      const link = database.prepare('INSERT INTO estimate_evidence (estimate_id, evidence_id) VALUES (?, ?)')
+      const now = new Date().toISOString()
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        for (const { input, id } of prepared) {
+          insert.run(id, input.metricId, input.targetPeriodType, input.targetPeriodStart ?? null, input.targetPeriodEnd, input.asOf, input.publishedAt ?? null, input.observedAt ?? null, input.provider, input.analyst ?? null, input.estimateType, typeof input.value === 'number' ? input.value : null, typeof input.value === 'string' ? input.value : null, input.unit ?? null, input.dimensions ? JSON.stringify(input.dimensions) : null, input.ingestionMethod, input.verificationStatus, now)
+          for (const evidenceId of input.evidenceIds) link.run(id, evidenceId)
+        }
+        database.exec('COMMIT')
+      } catch (error) { database.exec('ROLLBACK'); throw error }
+      return prepared.map(({ id }) => id)
     })
   }
 
@@ -326,12 +359,26 @@ export class EquityDataEngine {
         if (!evidence) throw new Error(`Unknown Evidence: ${evidenceId}`)
       }
       if (input.companyIndustryId) assertCompanyIndustry(database, companyId, input.companyIndustryId)
-      if (input.businessLineId) assertBusinessLine(database, companyId, input.businessLineId)
+      if (input.businessLineId) assertBusinessLine(database, companyId, input.businessLineId, input.companyIndustryId)
       const factId = `fact-${randomUUID()}`
+      let targetFactId = factId
       const now = new Date().toISOString()
       database.exec('BEGIN IMMEDIATE')
       try {
-        database.prepare(`INSERT INTO facts (
+        const existing = database.prepare(`SELECT fact_id FROM facts
+          WHERE metric_id = ? AND company_industry_id IS ? AND business_line_id IS ?
+            AND period_type = ? AND period_start IS ? AND period_end = ? AND dimensions_json IS ?`).get(
+          input.metricId, input.companyIndustryId ?? null, input.businessLineId ?? null, input.periodType,
+          input.periodStart ?? null, input.periodEnd, dimensions ? JSON.stringify(dimensions) : null,
+        ) as { fact_id: string } | undefined
+        targetFactId = existing?.fact_id ?? factId
+        if (existing) {
+          database.prepare(`UPDATE facts SET value_number = ?, value_text = ?, value_boolean = ?, unit = ?, source_reported_at = ?, observed_at = ?, ingestion_method = ?, verification_status = ?, updated_at = ? WHERE fact_id = ?`).run(
+            valueColumns.number, valueColumns.text, valueColumns.boolean, input.unit ?? null, input.sourceReportedAt ?? null,
+            input.observedAt ?? null, input.ingestionMethod, input.verificationStatus, now, targetFactId,
+          )
+          database.prepare('DELETE FROM fact_evidence WHERE fact_id = ?').run(targetFactId)
+        } else database.prepare(`INSERT INTO facts (
           fact_id, metric_id, company_industry_id, business_line_id, period_type, period_start,
           period_end, value_number, value_text, value_boolean, unit, source_reported_at,
           observed_at, dimensions_json, ingestion_method, verification_status, created_at, updated_at
@@ -343,13 +390,13 @@ export class EquityDataEngine {
           input.ingestionMethod, input.verificationStatus, now, now,
         )
         const link = database.prepare('INSERT INTO fact_evidence (fact_id, evidence_id) VALUES (?, ?)')
-        for (const evidenceId of input.evidenceIds) link.run(factId, evidenceId)
+        for (const evidenceId of input.evidenceIds) link.run(targetFactId, evidenceId)
         database.exec('COMMIT')
       } catch (error) {
         database.exec('ROLLBACK')
         throw error
       }
-      return factId
+      return targetFactId
     })
   }
 
@@ -391,9 +438,23 @@ function valueColumnsFor(valueType: 'number' | 'text' | 'boolean', value: number
 }
 
 function validateDate(value: string, field: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  const parsed = match ? new Date(`${value}T00:00:00Z`) : undefined
+  if (!match || !parsed || Number.isNaN(parsed.getTime()) || parsed.getUTCFullYear() !== Number(match[1]) || parsed.getUTCMonth() + 1 !== Number(match[2]) || parsed.getUTCDate() !== Number(match[3])) {
     throw new Error(`${field} must be an ISO date (YYYY-MM-DD)`)
   }
+}
+
+function validateEstimateShape(input: EstimateInput): void {
+  validateDate(input.targetPeriodEnd, 'targetPeriodEnd'); validateDate(input.asOf, 'asOf')
+  if (input.targetPeriodType === 'duration') {
+    if (!input.targetPeriodStart) throw new Error('duration estimates require targetPeriodStart')
+    validateDate(input.targetPeriodStart, 'targetPeriodStart')
+    if (input.targetPeriodStart > input.targetPeriodEnd) throw new Error('targetPeriodStart must not be after targetPeriodEnd')
+  } else if (input.targetPeriodStart) throw new Error('instant estimates must not have targetPeriodStart')
+  if (!input.provider.trim()) throw new Error('estimates require provider')
+  if (!input.estimateType.trim()) throw new Error('estimates require estimateType')
+  if (!input.evidenceIds.length) throw new Error('estimates require at least one local Evidence')
 }
 
 function assertCompanyIndustry(database: DatabaseSync, companyId: string, id: string): void {
@@ -405,10 +466,10 @@ function assertCompany(database: DatabaseSync, companyId: string): void {
   if (!database.prepare('SELECT company_id FROM companies WHERE company_id = ?').get(companyId)) throw new Error(`Unknown company: ${companyId}`)
 }
 
-function assertBusinessLine(database: DatabaseSync, companyId: string, id: string): void {
+function assertBusinessLine(database: DatabaseSync, companyId: string, id: string, companyIndustryId?: string): void {
   const row = database.prepare(`SELECT b.business_line_id FROM business_lines b
     JOIN company_industries ci ON ci.company_industry_id = b.company_industry_id
-    WHERE b.business_line_id = ? AND ci.company_id = ? AND b.active = 1`).get(id, companyId)
+    WHERE b.business_line_id = ? AND ci.company_id = ? AND b.active = 1${companyIndustryId ? ' AND b.company_industry_id = ?' : ''}`).get(...(companyIndustryId ? [id, companyId, companyIndustryId] : [id, companyId]))
   if (!row) throw new Error(`Unknown business line: ${id}`)
 }
 
