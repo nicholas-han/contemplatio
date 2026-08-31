@@ -7,6 +7,7 @@ export function createEquityResearchTools(archive: EquityArchive) {
   const data = new EquityDataEngine(archive)
   const models = new EquityModelEngine(archive)
   return {
+    listCompanies: () => archive.listCompanies(),
     getCompany: async (companyId: string) => (await archive.openCompany(companyId)).manifest,
     getFinancials: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, { ...factFilter(metricId, limit), category: 'financial' }),
     getOperatingMetrics: (companyId: string, metricId?: string, limit?: number) => data.listFacts(companyId, { ...factFilter(metricId, limit), category: 'operating' }),

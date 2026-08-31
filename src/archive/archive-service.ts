@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { copyFile, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { companyManifestSchema, type CompanyManifest } from '../domain/company.js'
@@ -47,6 +47,16 @@ export class EquityArchive {
 
   async initialize(): Promise<void> {
     await mkdir(this.root, { recursive: true })
+  }
+
+  async listCompanies(): Promise<CompanyManifest[]> {
+    const entries = await readdir(this.root, { withFileTypes: true })
+    const manifests: CompanyManifest[] = []
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+      try { manifests.push(await this.readManifest(entry.name)) } catch { /* Ignore non-company directories. */ }
+    }
+    return manifests.sort((a, b) => a.company_id.localeCompare(b.company_id))
   }
 
   companyPath(companyId: string): string {
