@@ -1,0 +1,45 @@
+{
+  "name": "@conte/equity-research",
+  "version": "0.1.0",
+  "description": "Local-first company-centric equity research for DeepSeek Harness",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx tests/**/*.test.ts",
+    "seed:yankuang": "node --env-file-if-exists=.env --import tsx scripts/seed-yankuang.ts",
+    "import:legacy": "node --env-file-if-exists=.env --import tsx scripts/import-legacy.ts",
+    "stage:legacy-observations": "node --env-file-if-exists=.env --import tsx scripts/stage-legacy-observations.ts"
+    ,"promote:legacy": "node --env-file-if-exists=.env --import tsx scripts/promote-legacy.ts",
+    "review:legacy": "node --env-file-if-exists=.env --import tsx scripts/review-legacy.ts"
+    ,"web:dev": "node --env-file-if-exists=.env --import tsx scripts/start-web.ts",
+    "promote:legacy-unverified": "node --env-file-if-exists=.env --import tsx scripts/promote-legacy-unverified.ts"
+    ,"normalize:legacy-periods": "node --env-file-if-exists=.env --import tsx scripts/normalize-legacy-periods.ts"
+    ,"refresh:legacy-mappings": "node --env-file-if-exists=.env --import tsx scripts/refresh-legacy-mappings.ts"
+    ,"import:estimates": "node --env-file-if-exists=.env --import tsx scripts/import-estimates.ts"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "cordis": "^4.0.0-rc.8",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,2366 @@
+# Conte Equity Research v0.1 — Architecture & Domain Specification
+
+**Project:** Contemplatio (Conte)  
+**Subsystem:** Equity Research  
+**Status:** Architecture specification for MVP implementation  
+**Version:** v0.1  
+**Primary runtime:** DeepSeek Harness / Cordis  
+**Primary deployment mode:** Local-first, single-user / small-group usage  
+**Primary storage mode:** Portable company-level folders + SQLite + local files  
+
+---
+
+## 1. Purpose
+
+Conte Equity Research is a local-first equity research system built as a DeepSeek Harness bundle. Its primary purpose is to organize, store, query, analyze, and present company-level research data in a structured and reproducible way without requiring a heavy frontend stack, centralized database infrastructure, or enterprise-grade deployment architecture.
+
+The MVP prioritizes:
+
+- correct business logic;
+- company-centric research organization;
+- structured financial and operating data;
+- point-in-time analyst estimates;
+- strict provenance;
+- reusable industry and business-line templates;
+- parameterized valuation and scenario models;
+- agent access through Harness tools;
+- a lightweight local Web UI for complete company-level display and model interaction;
+- portability and inspectability of all company data.
+
+The MVP explicitly does **not** optimize for:
+
+- multi-user cloud deployment;
+- PostgreSQL or distributed storage;
+- enterprise permissioning;
+- sophisticated frontend engineering;
+- universal industry ontology;
+- event sourcing / full historical revision tracking of all actual facts;
+- automatic synchronization of template changes into existing companies;
+- complete cross-company source deduplication;
+- generic semantic opinion or thesis storage.
+
+---
+
+## 2. Core Design Principles
+
+### 2.1 Company is the atomic research unit
+
+The primary aggregate root of Equity Research is **Company**, not Security.
+
+A company may have multiple securities, listings, share classes, or exchanges, but all research data belongs to a single company workspace.
+
+Example:
+
+```text
+Ping An Insurance (Company)
+├── 601318.SH
+└── 2318.HK
+```
+
+Security-level information is metadata under Company; it does not define an independent research object.
+
+---
+
+### 2.2 Company workspace is fully self-contained
+
+Each company must be portable as a standalone directory.
+
+Copying a company folder should preserve the company’s:
+
+- manifest;
+- structured data;
+- analyst estimates;
+- source documents;
+- provenance records;
+- management history;
+- cap table history;
+- scenarios;
+- model runs;
+- Web-displayable state.
+
+A future Mailroom subsystem may maintain its own central archive, but Equity Research must not depend on that architecture for basic operation.
+
+Duplicate local copies of the same source document across company folders are acceptable in v0.1.
+
+---
+
+### 2.3 Business taxonomy is investor-defined, not disclosure-defined
+
+Conte must **not** infer company structure directly from every segment, subsidiary, channel, product, or disclosure dimension in annual reports.
+
+The research taxonomy is intentionally narrow and user-defined:
+
+```text
+Company
+└── Industry
+    └── Business Line
+```
+
+A Company may belong to multiple Industries.  
+A Business Line belongs to exactly one Industry.
+
+Disclosure dimensions such as:
+
+- subsidiary;
+- coal type;
+- mine;
+- geography;
+- product;
+- customer type;
+- channel;
+- legal entity;
+
+remain **data dimensions**, not business-structure objects.
+
+Example:
+
+```text
+Yankuang Energy
+└── Coal
+    ├── Coal Mining & Sales
+    ├── Coal Chemicals
+    └── Power Generation
+```
+
+`Yancoal Australia`, `Luxi Mining`, `thermal coal`, and `coking coal` are not business lines. They may appear only as operating-data dimensions when useful.
+
+---
+
+### 2.4 Reusable templates provide vocabulary, not mandatory completeness
+
+Industry-level templates exist to reduce repeated setup work and standardize metric vocabulary across a limited number of industries.
+
+Templates do **not** require every company to disclose every metric.
+
+A template is therefore best understood as a **Metric Pack** containing reusable definitions and optional business-line definitions.
+
+Example:
+
+```text
+Coal Metric Pack
+├── core operating metrics
+├── optional operating metrics
+├── industry-specific financial metrics
+└── allowed business-line definitions
+```
+
+A company may use only a subset of the metrics supported by its Metric Pack.
+
+---
+
+### 2.5 Strong provenance ends at a locally retained artifact
+
+External URLs are acquisition metadata only. They are not considered durable evidence.
+
+The authoritative provenance chain is:
+
+```text
+External World
+    ↓ acquisition
+Source Metadata
+    ↓
+Local Artifact
+    ↓
+Evidence Locator
+    ↓
+Fact / Estimate
+```
+
+If a webpage is scraped and then edited into a local Markdown document, the local edited document may become the final retained artifact even if the original webpage is not preserved.
+
+If a source is a PDF filing or PDF analyst report, the original PDF should normally be retained locally.
+
+---
+
+### 2.6 History is stored only where business value justifies it
+
+v0.1 does **not** implement universal point-in-time state or event sourcing.
+
+History rules:
+
+| Object | Historical storage policy |
+|---|---|
+| Actual financial / operating facts | Current authoritative value only; overwrite on correction/restatement |
+| Analyst estimates | Full point-in-time history required |
+| Management roles | Historical start/end dates required |
+| Reporting lines | Historical start/end dates required |
+| Cap table | Snapshot history required |
+| Model runs | Historical runs retained |
+| Template applications | Record applied version; updates require explicit manual action |
+| Company manifest | Current state only |
+
+---
+
+## 3. DeepSeek Harness Bundle Architecture
+
+Conte Equity Research is distributed as one Harness bundle containing four Cordis plugins.
+
+```text
+@conte/equity-research
+│
+├── conte-equity-archive
+├── conte-equity-data-engine
+├── conte-equity-model-engine
+└── conte-equity-web-service
+```
+
+All four plugins may live in one repository and one npm package in v0.1.
+
+They are runtime/lifecycle boundaries, not necessarily package boundaries.
+
+---
+
+## 4. Plugin Responsibilities
+
+## 4.1 `conte-equity-archive`
+
+### Responsibility
+
+Authoritative local persistence layer for company workspaces.
+
+### Owns
+
+- company-directory discovery;
+- company path resolution;
+- `company.json` reading/writing;
+- `company.sqlite` connection and migration;
+- local document storage;
+- artifact hashing;
+- file integrity checks;
+- low-level persistence helpers;
+- archive initialization;
+- archive backup/export primitives where useful.
+
+### Must not own
+
+- finance-specific semantics;
+- bank/coal/insurance metric logic;
+- valuation calculations;
+- agent-facing business tools;
+- industry template interpretation beyond persistence.
+
+### Conceptual service
+
+```text
+ctx.equityArchive
+```
+
+Example capabilities:
+
+```ts
+openCompany(companyId)
+createCompany(manifest)
+readManifest(companyId)
+writeManifest(companyId, manifest)
+withDatabase(companyId, fn)
+storeArtifact(companyId, sourcePathOrBytes, metadata)
+resolveArtifact(companyId, artifactId)
+computeArtifactHash(...)
+```
+
+The name `archive` refers to the authoritative persistence layer, not read-only cold storage.
+
+---
+
+## 4.2 `conte-equity-data-engine`
+
+### Responsibility
+
+Domain-level data service for company research data.
+
+### Depends on
+
+```text
+conte-equity-archive
+```
+
+### Owns
+
+- Company domain objects;
+- corporate structure;
+- people and role history;
+- management reporting relationships;
+- company industries;
+- company business lines;
+- Metric Pack application;
+- metric definitions;
+- financial facts;
+- operating facts;
+- analyst estimates;
+- source metadata;
+- source artifacts metadata;
+- evidence;
+- provenance validation;
+- import / extraction commit workflows;
+- domain validation;
+- agent-facing data tools.
+
+### Must not own
+
+- raw filesystem details;
+- raw SQLite file lifecycle;
+- valuation formula implementation;
+- HTML rendering.
+
+### Conceptual service
+
+```text
+ctx.equityDataEngine
+```
+
+Example capabilities:
+
+```ts
+getCompany(companyId)
+listCompanies()
+getFinancialFacts(...)
+getOperatingFacts(...)
+getEstimates(...)
+getManagement(...)
+getCapTable(...)
+getSources(...)
+getEvidence(...)
+applyMetricPack(...)
+upsertFact(...)
+appendEstimate(...)
+```
+
+### Harness tools
+
+This plugin should directly register appropriate model-callable tools via Harness `ctx.tools`.
+
+There is no separate `conte-equity-tools` plugin in v0.1.
+
+---
+
+## 4.3 `conte-equity-model-engine`
+
+### Responsibility
+
+Parameterized valuation, scenario analysis, and model execution.
+
+### Depends on
+
+```text
+conte-equity-data-engine
+conte-equity-archive
+```
+
+The Model Engine should obtain research data through `equity-data-engine`, not through raw SQL.
+
+### Owns
+
+- model definitions;
+- valuation calculations;
+- model inputs;
+- scenario definitions;
+- model execution;
+- model run persistence;
+- model outputs;
+- model version metadata;
+- composite/SOTP model orchestration;
+- agent-facing model tools.
+
+### Examples
+
+```text
+Generic DCF
+Coal DCF / commodity scenario model
+Bank DDM
+Bank P/B–ROE framework
+Insurance P/EV / NBV framework
+Composite SOTP model
+```
+
+### Model philosophy
+
+Models are **code-defined and parameterized**.
+
+The user does not need to write code to run a model. The calculation structure is defined in code while input parameters may be edited via the Web UI or agent tools.
+
+Example:
+
+```text
+Revenue CAGR       8.0%
+Margin            22.0%
+WACC               9.0%
+Terminal Growth    3.0%
+```
+
+A Scenario is a named set of input overrides.
+
+A Model Run stores the actual input snapshot and output snapshot used at execution time.
+
+### Conceptual service
+
+```text
+ctx.equityModelEngine
+```
+
+---
+
+## 4.4 `conte-equity-web-service`
+
+### Responsibility
+
+Local HTTP service and lightweight Web UI.
+
+### Depends on
+
+```text
+conte-equity-data-engine
+conte-equity-model-engine
+```
+
+### Owns
+
+- local HTTP server lifecycle;
+- Web routes;
+- API routes;
+- static assets;
+- HTML rendering;
+- tables and charts;
+- model input forms;
+- scenario editing UI;
+- model execution UI;
+- source/evidence navigation UI.
+
+### Must not
+
+- read `company.sqlite` directly;
+- bypass domain services;
+- implement separate business logic from the Agent path.
+
+Both Harness Agent and Web UI must use the same domain services.
+
+```text
+                 Harness Agent
+                    /      \
+                   v        v
+         equity-data      equity-model
+             engine          engine
+                 ^             ^
+                  \           /
+                   \         /
+                  web-service
+```
+
+The MVP Web UI should remain deliberately lightweight.
+
+A simple local HTTP server + server-rendered HTML or minimal JavaScript is preferred over a large React/Next.js architecture unless implementation needs later prove otherwise.
+
+---
+
+## 5. Recommended Repository Structure
+
+```text
+conte-equity-research/
+│
+├── package.json
+├── README.md
+├── cordis.patch.yml
+│
+├── src/
+│   ├── domain/
+│   │   ├── company.ts
+│   │   ├── corporate.ts
+│   │   ├── industry.ts
+│   │   ├── business-line.ts
+│   │   ├── metric.ts
+│   │   ├── fact.ts
+│   │   ├── estimate.ts
+│   │   ├── source.ts
+│   │   ├── evidence.ts
+│   │   ├── scenario.ts
+│   │   └── model.ts
+│   │
+│   ├── metric-packs/
+│   │   ├── financial-common/
+│   │   ├── coal/
+│   │   ├── bank/
+│   │   └── insurance/
+│   │
+│   ├── models/
+│   │   ├── generic-dcf/
+│   │   ├── coal/
+│   │   ├── bank/
+│   │   ├── insurance/
+│   │   └── composite/
+│   │
+│   ├── plugins/
+│   │   ├── archive.ts
+│   │   ├── data-engine.ts
+│   │   ├── model-engine.ts
+│   │   └── web-service.ts
+│   │
+│   └── web/
+│       ├── templates/
+│       ├── static/
+│       └── routes/
+│
+└── tests/
+```
+
+The exact file layout may evolve. The important boundary is conceptual, not cosmetic.
+
+---
+
+## 6. Company Workspace Layout
+
+Each company is represented by one self-contained folder.
+
+Example:
+
+```text
+companies/
+└── yankuang-energy/
+    │
+    ├── company.json
+    ├── company.sqlite
+    │
+    ├── documents/
+    │   ├── filings/
+    │   ├── earnings/
+    │   ├── analyst/
+    │   ├── media/
+    │   ├── curated/
+    │   └── other/
+    │
+    └── exports/
+```
+
+### `company.json`
+
+Current manifest and stable identity/configuration.
+
+### `company.sqlite`
+
+Authoritative structured research state.
+
+### `documents/`
+
+Locally retained source artifacts and curated materials.
+
+### `exports/`
+
+Generated and disposable outputs such as exported reports or tables.
+
+Folder placement is for human convenience only. Database metadata is authoritative for source type and provenance.
+
+---
+
+## 7. `company.json` Manifest
+
+The manifest contains relatively stable company-level metadata and current workspace configuration.
+
+Recommended initial structure:
+
+```json
+{
+  "schema_version": "0.1",
+  "company_id": "yankuang-energy",
+  "name_zh": "兖矿能源集团股份有限公司",
+  "name_en": "Yankuang Energy Group Company Limited",
+  "website": "https://...",
+  "jurisdiction": "CN",
+  "accounting_standard": "CAS",
+  "primary_industry": "coal",
+  "securities": [
+    {
+      "exchange": "SSE",
+      "ticker": "600188",
+      "security_type": "common_equity"
+    },
+    {
+      "exchange": "HKEX",
+      "ticker": "01171",
+      "security_type": "common_equity"
+    }
+  ]
+}
+```
+
+### Must remain outside `company.json`
+
+Do not place mutable historical data in the manifest, including:
+
+- current/historical executives;
+- board members;
+- reporting lines;
+- cap table;
+- financial facts;
+- operating facts;
+- analyst estimates;
+- applied Metric Pack versions;
+- scenarios;
+- model runs.
+
+`company.json` is a manifest, not a database.
+
+---
+
+## 8. Accounting Standard Policy
+
+v0.1 supports exactly **one authoritative accounting standard per company workspace**.
+
+Examples:
+
+```text
+CAS
+IFRS
+US-GAAP
+```
+
+The selected standard is stored in `company.json`.
+
+A source may record a different accounting standard in its own metadata, but such data must not be silently imported as authoritative financial facts if it conflicts with the company’s configured standard.
+
+No parallel CAS/IFRS fact sets are supported in v0.1.
+
+---
+
+## 9. Corporate and Management Model
+
+Management history and reporting structure require explicit temporal modeling.
+
+### 9.1 `people`
+
+Represents a person independently of a company position.
+
+Suggested fields:
+
+```text
+person_id
+name_zh
+name_en
+birth_year        nullable
+biography         nullable
+created_at
+updated_at
+```
+
+---
+
+### 9.2 `organization_units`
+
+Represents organizational units used to display management structure where necessary.
+
+Examples:
+
+```text
+Group Management
+Finance
+Investment
+Life & Health
+Board of Directors
+Audit Committee
+```
+
+Suggested fields:
+
+```text
+organization_unit_id
+parent_unit_id        nullable
+name
+unit_type
+active
+```
+
+This table is optional for very simple companies but should exist in the schema.
+
+---
+
+### 9.3 `positions`
+
+Represents stable organizational positions independently of who currently occupies them.
+
+Examples:
+
+```text
+Group CEO
+CFO
+President
+行长
+董事长
+Head of Investment
+```
+
+Suggested fields:
+
+```text
+position_id
+organization_unit_id     nullable
+role_type                 nullable
+role_title_raw
+position_name_normalized  nullable
+active
+```
+
+`role_title_raw` preserves the company’s actual terminology.
+
+`role_type` may provide a normalized semantic category such as `ceo`, `cfo`, `chairman`, `president`, but should not erase the raw title.
+
+---
+
+### 9.4 `role_assignments`
+
+Historical assignment of people to positions.
+
+Suggested fields:
+
+```text
+assignment_id
+person_id
+position_id
+start_date
+end_date          nullable
+is_current
+source_id         nullable
+evidence_id       nullable
+```
+
+---
+
+### 9.5 `reporting_lines`
+
+Management reporting relationships belong between **positions**, not between people.
+
+Suggested fields:
+
+```text
+reporting_line_id
+subordinate_position_id
+manager_position_id
+relationship_type
+start_date
+end_date          nullable
+evidence_id       nullable
+```
+
+Initial relationship types:
+
+```text
+solid
+dotted
+```
+
+This design allows management structure to remain stable when position holders change.
+
+Board governance relationships must not automatically be interpreted as management reporting relationships.
+
+---
+
+## 10. Industry and Business-Line Taxonomy
+
+## 10.1 `company_industries`
+
+A company may participate in more than one industry.
+
+Suggested fields:
+
+```text
+company_industry_id
+industry_id
+is_primary
+active
+```
+
+Example:
+
+```text
+Ping An
+├── insurance
+├── banking
+└── asset-management
+```
+
+---
+
+## 10.2 Business Lines
+
+Business Lines are investor-defined research categories under an Industry.
+
+A Business Line must belong to exactly one Industry.
+
+Examples:
+
+### Coal
+
+```text
+coal.coal_mining_and_sales
+coal.coal_chemicals
+coal.power_generation
+```
+
+### Banking
+
+```text
+bank.retail_banking
+bank.wholesale_banking
+```
+
+### Insurance
+
+```text
+insurance.life_and_health
+insurance.p_and_c
+```
+
+The same natural-language name may exist under multiple industries but represents different identifiers.
+
+Example:
+
+```text
+coal.power_generation
+hydropower.power_generation
+```
+
+These must not be treated as the same reusable business-line object.
+
+---
+
+## 10.3 `business_lines`
+
+Company-level enabled business lines.
+
+Suggested fields:
+
+```text
+business_line_id
+company_industry_id
+business_line_type_id
+display_name
+active
+created_at
+updated_at
+```
+
+The system must not automatically create business lines by parsing annual-report segment disclosures.
+
+Business lines are configured deliberately by the user.
+
+---
+
+## 11. Metric Packs
+
+Metric Packs provide reusable vocabulary and business-line definitions.
+
+Recommended structure:
+
+```text
+metric-packs/
+├── financial-common/
+│   ├── pack.json
+│   └── metrics.json
+│
+├── coal/
+│   ├── pack.json
+│   ├── business-lines.json
+│   ├── financial-metrics.json
+│   └── operating-metrics.json
+│
+├── bank/
+└── insurance/
+```
+
+### Metric Pack responsibilities
+
+A Metric Pack may define:
+
+- metric IDs;
+- display names;
+- metric categories;
+- units;
+- value types;
+- period behavior;
+- allowed dimensions;
+- preferred display grouping;
+- optional validation rules;
+- available business-line types.
+
+A Metric Pack is **not** a separate Cordis plugin.
+
+---
+
+## 12. Template Application Semantics
+
+Applying a Metric Pack to a company copies/initializes the relevant definitions into that company’s local structured state.
+
+Existing companies do not automatically inherit future Metric Pack changes.
+
+### `template_applications`
+
+Suggested fields:
+
+```text
+application_id
+template_type
+metric_pack_id
+metric_pack_version
+company_industry_id    nullable
+applied_at
+```
+
+Examples:
+
+```text
+financial-common@0.1 → company-level
+coal@0.3             → coal company_industry
+bank@0.2             → banking company_industry
+```
+
+### Update policy
+
+When a Metric Pack is upgraded:
+
+```text
+coal@0.3 → coal@0.4
+```
+
+existing companies remain unchanged until the user explicitly runs a refresh/apply-update action.
+
+A future implementation may provide a diff before applying changes, but automatic mutation is prohibited in v0.1.
+
+---
+
+## 13. Metric Definition Model
+
+`metric_definitions` is a core table in the system.
+
+Suggested fields:
+
+```text
+metric_id
+namespace
+name
+label_zh          nullable
+label_en          nullable
+category
+value_type
+canonical_unit    nullable
+period_behavior
+aggregation_rule  nullable
+origin_pack_id    nullable
+origin_pack_version nullable
+allowed_dimensions_json
+metadata_json     nullable
+active
+created_at
+updated_at
+```
+
+### Example: common financial metric
+
+```text
+metric_id: financial.revenue
+category: financial
+value_type: number
+canonical_unit: CNY
+period_behavior: duration
+origin_pack_id: financial-common
+```
+
+### Example: coal operating metric
+
+```text
+metric_id: coal.production
+category: operating
+canonical_unit: tonne
+period_behavior: duration
+origin_pack_id: coal
+allowed_dimensions:
+  - subsidiary
+  - coal_type
+  - mine
+```
+
+### Example: banking metric
+
+```text
+metric_id: bank.nim
+category: financial
+canonical_unit: percent
+period_behavior: duration
+origin_pack_id: bank
+```
+
+Metric vocabulary is reusable; actual disclosure coverage is not required to be complete across companies.
+
+---
+
+## 14. Financial and Operating Facts
+
+Conte uses a shared fact container while preserving semantic category through `metric_definitions.category`.
+
+Financial and operating data do not require physically separate SQLite tables in v0.1 unless implementation simplicity strongly favors it.
+
+### `facts`
+
+Suggested fields:
+
+```text
+fact_id
+metric_id
+company_industry_id     nullable
+business_line_id        nullable
+
+period_type
+period_start            nullable
+period_end
+
+value_number            nullable
+value_text              nullable
+value_boolean           nullable
+unit                     nullable
+
+source_reported_at      nullable
+observed_at              nullable
+
+dimensions_json         nullable
+
+ingestion_method
+verification_status
+
+created_at
+updated_at
+```
+
+Only one value column should be populated according to metric `value_type`.
+
+---
+
+## 15. Period Semantics
+
+Avoid ambiguous labels such as `2025Q3` as the sole time representation.
+
+All facts should use explicit period semantics.
+
+### `period_type = duration`
+
+Example:
+
+```text
+Revenue FY2025
+period_start = 2025-01-01
+period_end   = 2025-12-31
+```
+
+### `period_type = instant`
+
+Example:
+
+```text
+Total Assets at 2025-12-31
+period_end = 2025-12-31
+```
+
+Quarter, half-year, nine-month, and full-year labels may be derived or stored as display metadata, but should not replace explicit dates.
+
+---
+
+## 16. Financial Facts vs Operating Dimensions
+
+### 16.1 Financial facts
+
+Financial facts should normally exist at:
+
+- company consolidated level; or
+- explicitly defined Business Line level when economically meaningful.
+
+The system should not encourage arbitrary financial decomposition by:
+
+- subsidiary;
+- product;
+- mine;
+- coal type;
+- geography;
+- channel;
+
+unless the user explicitly determines the decomposition is economically valid.
+
+This avoids pseudo-P&L structures created merely because a company reports revenue/cost line items in a particular disclosure table.
+
+---
+
+### 16.2 Operating facts
+
+Operating data may use flexible disclosure dimensions.
+
+Example:
+
+```text
+metric = coal.production
+industry = coal
+business_line = coal.coal_mining_and_sales
+
+dimensions = {
+  "subsidiary": "yancoal_australia",
+  "coal_type": "thermal"
+}
+```
+
+Operating dimensions do not create new business lines.
+
+---
+
+## 17. Dimension Policy
+
+Dimensions are heterogeneous but controlled.
+
+Examples:
+
+```text
+subsidiary
+coal_type
+mine
+geography
+product_type
+customer_type
+channel
+currency
+```
+
+v0.1 may store dimensions as JSON:
+
+```json
+{
+  "coal_type": "thermal",
+  "subsidiary": "yancoal_australia"
+}
+```
+
+However, each Metric Definition should specify allowed dimension keys to prevent vocabulary drift such as:
+
+```text
+channel
+sales_channel
+distribution_channel
+channel_type
+```
+
+for the same semantic concept.
+
+The system does not require all companies to provide the same dimension coverage.
+
+---
+
+## 18. Actual Fact Revision Policy
+
+v0.1 keeps only the **current authoritative value** for actual financial and operating facts.
+
+If a historical value is restated or corrected:
+
+```text
+old value → overwrite with current authoritative value
+```
+
+Update provenance to the new authoritative source/evidence.
+
+No `revision_of_fact_id`, event sourcing, or historical actual-fact chain is required in v0.1.
+
+Basic `created_at` / `updated_at` timestamps may remain for housekeeping.
+
+---
+
+## 19. Analyst Estimates
+
+Analyst estimates require explicit point-in-time history.
+
+### Core semantic dimensions
+
+```text
+What metric is being estimated?
+For which target period?
+By whom / which provider?
+As known at what point in time?
+From which evidence?
+```
+
+### `estimates`
+
+Suggested fields:
+
+```text
+estimate_id
+metric_id
+company_industry_id    nullable
+business_line_id       nullable
+
+target_period_type
+target_period_start    nullable
+target_period_end
+
+as_of
+published_at           nullable
+observed_at            nullable
+
+provider
+analyst                 nullable
+estimate_type
+
+value_number            nullable
+value_text              nullable
+unit                    nullable
+
+dimensions_json         nullable
+
+ingestion_method
+verification_status
+
+created_at
+```
+
+Estimate history must never be overwritten merely because a newer estimate exists.
+
+Example:
+
+```text
+CMB FY2027E Net Profit
+2026-06-30 → 182B
+2026-07-31 → 186B
+2026-08-27 → 191B
+```
+
+All remain queryable.
+
+---
+
+## 20. Estimate Ingestion Boundary
+
+Equity Research must not depend directly on Mailroom in v0.1.
+
+Use an internal importer/provider abstraction.
+
+Conceptually:
+
+```ts
+interface EstimateProvider {
+  getEstimates(companyId, query): Promise<EstimateInput[]>
+}
+```
+
+Possible providers:
+
+```text
+Manual Importer
+CSV Importer
+Free API Provider
+Future Mailroom Provider
+```
+
+Mailroom may later implement this interface without redesigning Equity Research.
+
+---
+
+## 21. Cap Table Model
+
+Use `captable_*` naming.
+
+### `share_classes`
+
+Suggested fields:
+
+```text
+share_class_id
+name
+security_type
+exchange          nullable
+ticker            nullable
+currency          nullable
+voting_rights_metadata nullable
+active
+```
+
+### `captable_snapshots`
+
+```text
+captable_snapshot_id
+as_of_date
+source_id         nullable
+evidence_id       nullable
+created_at
+```
+
+### `captable_class_totals`
+
+```text
+captable_snapshot_id
+share_class_id
+shares_outstanding
+percentage_of_total_equity nullable
+```
+
+### `captable_positions`
+
+```text
+captable_position_id
+captable_snapshot_id
+holder_name
+holder_id          nullable
+share_class_id
+shares             nullable
+ownership_pct      nullable
+rank               nullable
+```
+
+Cap table history is snapshot-based and retained over time.
+
+---
+
+## 22. Source and Provenance Architecture
+
+## 22.1 Core provenance chain
+
+```text
+Source
+  ↓
+Source Artifact
+  ↓
+Evidence
+  ↓
+Fact / Estimate
+```
+
+External URLs are non-authoritative acquisition metadata.
+
+---
+
+## 22.2 `sources`
+
+Represents the informational source as a logical object.
+
+Suggested fields:
+
+```text
+source_id
+source_type
+title
+publisher
+author            nullable
+published_at      nullable
+accessed_at       nullable
+original_url      nullable
+accounting_standard nullable
+upstream_source_id nullable
+notes             nullable
+created_at
+```
+
+Possible `source_type` values:
+
+```text
+filing
+earnings
+company_release
+analyst_report
+media
+api
+manual
+other
+```
+
+---
+
+## 22.3 `source_artifacts`
+
+Represents locally retained material.
+
+Suggested fields:
+
+```text
+artifact_id
+source_id
+artifact_kind
+media_type
+local_path
+sha256
+original_retained
+transformation_method nullable
+created_at
+```
+
+Possible `artifact_kind` values:
+
+```text
+original
+curated
+extracted
+transformed
+```
+
+Possible `transformation_method` values:
+
+```text
+manual_edit
+ai_assisted_manual_edit
+html_to_markdown
+ocr
+parser
+other
+```
+
+The SHA-256 hash should be computed from the retained local artifact.
+
+---
+
+## 22.4 Webpage retention policy
+
+If a webpage is scraped and then transformed into a curated local Markdown file, retaining the original HTML is optional.
+
+Example:
+
+```text
+Source:
+  title = high-quality article
+  original_url = https://...
+
+Artifact:
+  artifact_kind = curated
+  local_path = documents/curated/article.md
+  original_retained = false
+  transformation_method = ai_assisted_manual_edit
+```
+
+Evidence points to the retained local Markdown artifact.
+
+The original URL may later return 404 without breaking provenance.
+
+---
+
+## 22.5 PDF retention policy
+
+For filings, presentations, and analyst reports distributed as PDF, retain the PDF locally whenever practical.
+
+Example:
+
+```text
+Source
+  ↓
+Artifact: documents/filings/2025-annual-report.pdf
+  sha256 = ...
+```
+
+---
+
+## 22.6 `evidence`
+
+Evidence identifies the specific location inside an artifact that supports a structured observation.
+
+Suggested fields:
+
+```text
+evidence_id
+artifact_id
+locator_type
+locator_json
+excerpt_text      nullable
+notes             nullable
+created_at
+```
+
+Examples:
+
+### PDF
+
+```json
+{
+  "page": 73,
+  "section": "Operating Review",
+  "table": "Production and Sales",
+  "row": "Raw coal production"
+}
+```
+
+### Markdown
+
+```json
+{
+  "heading": "FY2025 Outlook",
+  "line_start": 42,
+  "line_end": 49
+}
+```
+
+### Spreadsheet
+
+```json
+{
+  "sheet": "Forecast",
+  "cell_range": "F12:H12"
+}
+```
+
+### API
+
+```json
+{
+  "endpoint": "/estimates",
+  "request": {"ticker": "..."},
+  "json_path": "$.data[0].eps"
+}
+```
+
+---
+
+## 22.7 Fact/Estimate evidence relationships
+
+Use many-to-many mapping.
+
+```text
+facts
+  ↕
+fact_evidence
+  ↕
+evidence
+```
+
+and:
+
+```text
+estimates
+  ↕
+estimate_evidence
+  ↕
+evidence
+```
+
+One fact may be supported by multiple evidence records.  
+One evidence record may support multiple facts.
+
+---
+
+## 23. Ingestion and Verification Metadata
+
+Every imported structured observation should record how it entered Conte.
+
+Recommended `ingestion_method` values:
+
+```text
+manual
+manual_verified
+api
+csv_import
+parser
+llm_extracted
+llm_assisted_manual
+```
+
+Recommended `verification_status` values:
+
+```text
+unverified
+machine_checked
+human_verified
+```
+
+Avoid pseudo-precise confidence scores in v0.1.
+
+---
+
+## 24. Source vs Structured Extraction Workflow
+
+Document retention and structured extraction are separate states.
+
+Recommended flow:
+
+```text
+Receive source material
+    ↓
+Archive local artifact
+    ↓
+Create Source + SourceArtifact
+    ↓
+Extract candidate facts / estimates
+    ↓
+Create Evidence
+    ↓
+Validate
+    ↓
+Commit structured observations
+```
+
+A document being archived does not imply that all relevant structured data has already been extracted.
+
+---
+
+## 25. Models, Scenarios, and Model Runs
+
+## 25.1 `ModelDefinition`
+
+A code-defined model should specify:
+
+- model ID;
+- model version;
+- supported company/industry context;
+- input schema;
+- calculation logic;
+- output schema;
+- optional child/component models.
+
+---
+
+## 25.2 Scenario
+
+A Scenario is a named set of parameter overrides.
+
+Example:
+
+```text
+Base
+coal_price = 700
+production = 100
+
+Bull
+coal_price = 850
+production = 105
+
+Bear
+coal_price = 550
+production = 95
+```
+
+### `scenarios`
+
+Suggested fields:
+
+```text
+scenario_id
+name
+model_id
+company_industry_id    nullable
+business_line_id       nullable
+parameters_json
+created_at
+updated_at
+```
+
+---
+
+## 25.3 Model Run
+
+A Model Run is a historical execution snapshot.
+
+Suggested fields:
+
+```text
+model_run_id
+model_id
+model_version
+scenario_id            nullable
+run_at
+inputs_json
+outputs_json
+notes                   nullable
+```
+
+v0.1 should prefer JSON snapshots over prematurely normalizing every model input/output into separate relational tables.
+
+---
+
+## 25.4 Composite models
+
+The Model Engine must conceptually allow one company valuation to combine multiple business-model components.
+
+Example:
+
+```text
+Ping An SOTP
+├── Life & Health valuation
+├── P&C valuation
+├── Bank valuation
+├── Asset Management valuation
+└── HoldCo adjustments
+```
+
+The implementation does not require a sophisticated generic composite-model framework in the first iteration. It is sufficient that models can invoke component calculations and aggregate outputs without architectural blockage.
+
+---
+
+## 26. Web UI MVP
+
+The Web UI is a required MVP feature.
+
+Recommended route pattern:
+
+```text
+/company/:company_id
+```
+
+Recommended company page sections:
+
+```text
+Overview
+Corporate / Management
+Cap Table
+Financials
+Operating Metrics
+Analyst Estimates
+Valuation / Scenarios
+Sources
+```
+
+### Key UI behaviors
+
+- table view of financial and operating facts;
+- chart selected metrics over time;
+- filter operating metrics by available dimensions;
+- browse estimate history by `as_of`;
+- edit scenario/model input parameters;
+- execute model runs;
+- inspect model outputs;
+- show source/evidence for important facts;
+- open locally retained artifact references;
+- display management/reporting structure where available.
+
+The Web UI must call domain services, not raw SQLite.
+
+---
+
+## 27. Initial Industry Definitions
+
+v0.1 should support three initial industries.
+
+## 27.1 Coal
+
+Initial target companies:
+
+```text
+Yankuang Energy
+China Shenhua (later peer expansion)
+```
+
+Initial business-line vocabulary:
+
+```text
+coal.coal_mining_and_sales
+coal.coal_chemicals
+coal.power_generation
+```
+
+Suggested core operating metrics:
+
+```text
+coal.production
+coal.sales_volume
+coal.asp
+coal.unit_cost
+coal.reserve
+```
+
+Optional dimensions may include:
+
+```text
+subsidiary
+coal_type
+mine
+geography
+```
+
+Do not automatically create logistics, equipment, or other minor disclosed segments as Business Lines.
+
+---
+
+## 27.2 Banking
+
+Initial target companies:
+
+```text
+China Merchants Bank
+ICBC
+```
+
+Initial business-line vocabulary may include:
+
+```text
+bank.retail_banking
+bank.wholesale_banking
+```
+
+but should remain user-configurable and not inferred from every reporting table.
+
+Suggested core metrics:
+
+```text
+bank.net_interest_income
+bank.net_fee_income
+bank.loan_balance
+bank.deposit_balance
+bank.nim
+bank.npl_ratio
+bank.provision_coverage
+bank.cet1_ratio
+bank.roe
+```
+
+Optional dimensions may include:
+
+```text
+customer_type
+loan_type
+industry
+geography
+product_type
+```
+
+---
+
+## 27.3 Insurance
+
+Initial target companies:
+
+```text
+Ping An Insurance
+China Life
+```
+
+Initial business-line vocabulary:
+
+```text
+insurance.life_and_health
+insurance.p_and_c
+```
+
+Possible additional industries may coexist in conglomerates:
+
+```text
+banking
+asset-management
+securities
+```
+
+Suggested insurance metrics:
+
+```text
+insurance.premium
+insurance.insurance_service_revenue
+insurance.nbv
+insurance.nbv_margin
+insurance.embedded_value
+insurance.csm
+insurance.investment_yield
+insurance.solvency_ratio
+```
+
+Optional dimensions may include:
+
+```text
+channel
+product_type
+customer_segment
+```
+
+---
+
+## 28. Worked Schema Example — Yankuang Energy
+
+### Company taxonomy
+
+```text
+Yankuang Energy
+└── Coal
+    ├── Coal Mining & Sales
+    ├── Coal Chemicals
+    └── Power Generation
+```
+
+### Financial fact
+
+```text
+metric_id = financial.revenue
+business_line_id = null
+period_type = duration
+period_start = 2025-01-01
+period_end = 2025-12-31
+value = ...
+unit = CNY
+```
+
+### Business-line financial fact
+
+```text
+metric_id = financial.revenue
+business_line_id = coal.coal_mining_and_sales
+period_type = duration
+...
+```
+
+Only store this decomposition when economically meaningful and intentionally configured.
+
+### Operating fact by subsidiary
+
+```text
+metric_id = coal.production
+business_line_id = coal.coal_mining_and_sales
+value = ...
+unit = tonne
+
+dimensions = {
+  "subsidiary": "yancoal_australia"
+}
+```
+
+### Operating fact by coal type
+
+```text
+metric_id = coal.sales_volume
+business_line_id = coal.coal_mining_and_sales
+
+dimensions = {
+  "coal_type": "thermal"
+}
+```
+
+No new Business Line is created for the subsidiary or coal type.
+
+---
+
+## 29. Worked Schema Example — China Merchants Bank
+
+### Company taxonomy
+
+```text
+China Merchants Bank
+└── Banking
+    ├── Retail Banking
+    └── Wholesale Banking
+```
+
+Whether both Business Lines are enabled is an explicit user configuration decision.
+
+### Core facts
+
+```text
+bank.loan_balance
+bank.deposit_balance
+bank.nim
+bank.npl_ratio
+bank.provision_coverage
+```
+
+### Operating dimension example
+
+```text
+metric_id = bank.loan_balance
+business_line_id = bank.retail_banking
+
+dimensions = {
+  "loan_type": "mortgage"
+}
+```
+
+### Point-in-time estimate
+
+```text
+metric_id = financial.net_profit
+as_of = 2026-08-27
+target_period_end = 2027-12-31
+provider = ...
+value = ...
+```
+
+---
+
+## 30. Worked Schema Example — Ping An Insurance
+
+### Company taxonomy
+
+```text
+Ping An
+│
+├── Insurance
+│   ├── Life & Health
+│   └── P&C
+│
+├── Banking
+│   └── Banking
+│
+└── Asset Management
+    └── Asset Management
+```
+
+This is genuine cross-industry composition at company level.
+
+### Insurance operating fact
+
+```text
+metric_id = insurance.nbv
+business_line_id = insurance.life_and_health
+
+dimensions = {
+  "channel": "bancassurance"
+}
+```
+
+### Composite model
+
+```text
+Ping An SOTP
+├── Life & Health model
+├── P&C model
+├── Bank model
+├── Asset Management model
+└── HoldCo adjustment
+```
+
+---
+
+## 31. Agent Tool Design Principles
+
+Do not expose low-level storage operations to the Agent.
+
+### Bad
+
+```text
+execute_sql
+write_database_row
+open_sqlite_file
+```
+
+### Good
+
+```text
+get_company
+get_financials
+get_operating_metrics
+get_estimates
+get_management
+get_captable
+get_sources
+get_evidence
+run_model
+save_scenario
+```
+
+Agent tools should call `equity-data-engine` or `equity-model-engine` domain methods.
+
+---
+
+## 32. Mailroom Boundary
+
+Mailroom and Equity Research remain separate subsystems.
+
+Conceptually:
+
+```text
+Mailroom
+  ↓
+trustworthy / retained source material
+  ↓
+Source + Artifact + Evidence contract
+=============================== boundary
+Equity Research
+  ↓
+Fact / Estimate / Structured Research Data
+```
+
+In v0.1, Equity Research can ingest source materials directly without Mailroom.
+
+Mailroom integration should later occur through narrow provider/import interfaces rather than direct internal coupling.
+
+---
+
+## 33. Explicit Non-Goals for v0.1
+
+Do not implement the following unless required by a blocking use case:
+
+- PostgreSQL;
+- cloud deployment;
+- multi-tenant database;
+- user accounts/permissions;
+- React/Next.js-heavy frontend architecture;
+- event sourcing;
+- historical revision chains for actual facts;
+- simultaneous multiple accounting standards for one company;
+- universal cross-industry business-line ontology;
+- automatic interpretation of every disclosure segment as a business line;
+- automatic template upgrades;
+- global source deduplication across company folders;
+- semantic investment thesis/opinion database;
+- full portfolio/position management;
+- enterprise search infrastructure;
+- distributed task queues;
+- generalized data warehouse dimensional modeling.
+
+---
+
+## 34. Recommended MVP Implementation Order
+
+### Phase 1 — Archive and Company bootstrap
+
+Implement:
+
+```text
+conte-equity-archive
+company.json
+company.sqlite initialization
+company directory layout
+schema migrations
+artifact storage + sha256
+```
+
+Success criterion:
+
+A company workspace can be created, opened, copied, and inspected manually.
+
+---
+
+### Phase 2 — Data Engine core
+
+Implement:
+
+```text
+Company metadata
+people / positions / assignments / reporting lines
+company industries
+business lines
+Metric Packs
+metric definitions
+facts
+sources / artifacts / evidence
+```
+
+Success criterion:
+
+Yankuang Energy can be represented with a small manually entered dataset and full provenance.
+
+---
+
+### Phase 3 — Initial industry packs
+
+Implement minimal packs for:
+
+```text
+financial-common
+coal
+bank
+insurance
+```
+
+Success criterion:
+
+Yankuang Energy, China Merchants Bank, and Ping An can all coexist under the same generic schema without custom database tables per industry.
+
+---
+
+### Phase 4 — Estimates
+
+Implement:
+
+```text
+point-in-time estimate schema
+manual/CSV importer
+optional free API provider
+estimate provenance
+```
+
+Success criterion:
+
+The same target-period estimate can be stored for multiple `as_of` dates and queried historically.
+
+---
+
+### Phase 5 — Model Engine
+
+Implement one simple model per useful research context rather than building a generic modeling framework first.
+
+Suggested first models:
+
+```text
+Coal scenario / valuation model
+Bank DDM or P/B–ROE model
+Insurance P/EV or simplified SOTP component
+```
+
+Success criterion:
+
+Model parameters can be changed, run, and stored with reproducible input/output snapshots.
+
+---
+
+### Phase 6 — Web Service
+
+Implement a local company page.
+
+Success criterion:
+
+A user can open a company page locally and view:
+
+- overview;
+- management;
+- financials;
+- operating data;
+- analyst estimates;
+- valuation/scenarios;
+- provenance/source links.
+
+---
+
+### Phase 7 — Harness tools
+
+Expose high-level Data Engine and Model Engine capabilities to the Harness Agent.
+
+Success criterion:
+
+Queries such as the following work through Agent tools:
+
+```text
+Show Yankuang Energy's last 8 quarters of coal production.
+Show CMB FY2027 net profit estimates as of each month-end.
+Run the Ping An base scenario with a lower NBV growth assumption.
+Show the source supporting this metric.
+```
+
+---
+
+## 35. Implementation Guardrails for Codex
+
+1. **Prefer simple, explicit code over framework abstraction.**
+2. **Do not split the four Cordis plugins into separate repositories or npm packages unless required.**
+3. **Do not add a generic ORM unless clearly needed.** Direct SQLite access inside `conte-equity-archive` is acceptable.
+4. **Do not let Web or Agent code execute raw SQL.**
+5. **Do not infer Business Lines automatically from filings.**
+6. **Do not create industry-specific fact tables.** Industry variation belongs in Metric Packs and metric definitions.
+7. **Do not make every object point-in-time.** Follow the explicit history policy.
+8. **Do not treat external URLs as durable provenance.** Evidence must terminate at a retained local artifact.
+9. **Do not preserve original webpage HTML unless useful.** Curated local Markdown may be the authoritative retained artifact.
+10. **Do preserve original PDFs where practical.**
+11. **Do not automatically mutate companies when Metric Packs change.**
+12. **Keep company folders self-contained and portable.**
+13. **Use JSON fields selectively for heterogeneous data such as evidence locators, dimensions, scenario parameters, and model snapshots.**
+14. **Do not normalize prematurely when JSON is materially simpler for MVP.**
+15. **Use migrations for `company.sqlite` schema changes from the beginning.**
+16. **Add tests around domain invariants before adding frontend polish.**
+
+---
+
+## 36. Core Invariants
+
+The following invariants should be enforced in code where practical.
+
+### Company
+
+- `company_id` is stable within a workspace.
+- one company workspace has one authoritative accounting standard in v0.1.
+
+### Business taxonomy
+
+- a Company may have multiple Industries;
+- a Business Line belongs to exactly one company Industry;
+- a Business Line must never be auto-created from a disclosure dimension.
+
+### Metrics
+
+- every Fact and Estimate references a known Metric Definition;
+- dimensions used by a Fact/Estimate should be allowed by its Metric Definition where validation is enabled.
+
+### Actual facts
+
+- the system stores only the current authoritative actual value;
+- corrections overwrite prior values rather than creating revision chains.
+
+### Estimates
+
+- estimates are append-only with respect to `as_of` history;
+- newer estimates do not delete older point-in-time observations.
+
+### Provenance
+
+- externally sourced important Facts/Estimates should reference Evidence;
+- Evidence must reference a local Artifact;
+- every local Artifact should have a SHA-256 hash;
+- `original_url` is never sufficient as sole evidence.
+
+### Templates
+
+- applying a Metric Pack records its version;
+- pack upgrades never mutate existing companies automatically.
+
+### UI and Agent
+
+- Web UI and Agent tools use the same domain services;
+- neither bypasses Data Engine / Model Engine to query SQLite directly.
+
+---
+
+## 37. Architectural Summary
+
+The v0.1 system can be summarized as follows:
+
+```text
+                         DeepSeek Harness
+                               │
+                    Conte Equity Research Bundle
+                               │
+          ┌────────────────────┼────────────────────┐
+          │                    │                    │
+          ▼                    ▼                    ▼
+conte-equity-data-engine  conte-equity-model-engine  conte-equity-web-service
+          │                    │                    │
+          └──────────────┬─────┴──────────────┬─────┘
+                         ▼                    │
+                conte-equity-archive ◄───────┘
+                         │
+                         ▼
+                 Company Workspaces
+                         │
+           ┌─────────────┼─────────────┐
+           ▼             ▼             ▼
+      company.json   company.sqlite  documents/
+```
+
+Domain model:
+
+```text
+Company
+│
+├── Corporate / Management
+│   ├── People
+│   ├── Positions
+│   ├── Role Assignments
+│   ├── Reporting Lines
+│   └── Cap Table Snapshots
+│
+├── Industry
+│   └── Business Line
+│
+├── Metric Definitions
+│   ├── Financial Facts
+│   ├── Operating Facts
+│   └── Analyst Estimates
+│
+├── Sources
+│   └── Local Artifacts
+│       └── Evidence
+│           └── Facts / Estimates
+│
+└── Models
+    ├── Scenarios
+    └── Model Runs
+```
+
+The governing principle is:
+
+> **Company is the workspace boundary. Industry and Business Line are deliberate investor-defined research taxonomy. Metric Packs provide reusable vocabulary. Facts and estimates remain generic structured observations. Disclosure-specific detail stays in operating dimensions. Provenance terminates at locally retained artifacts. Models consume the same structured data used by the Agent and Web UI.**
+
+---
+
+## 38. Recommended First Codex Task
+
+Do **not** ask Codex to implement the entire specification in one pass.
+
+The first implementation task should be limited to:
+
+1. repository skeleton;
+2. Cordis bundle/plugin registration;
+3. `conte-equity-archive`;
+4. company-folder initialization;
+5. `company.json` schema;
+6. `company.sqlite` migration framework;
+7. the minimal tables required for Company, Metric Definition, Fact, Source, Artifact, and Evidence;
+8. one small `financial-common` Metric Pack;
+9. one small `coal` Metric Pack;
+10. seed a minimal Yankuang Energy workspace manually;
+11. basic tests demonstrating portability and provenance.
+
+Only after this works should Estimates, Models, Management graph, Cap Table, and Web UI be layered in.
+
