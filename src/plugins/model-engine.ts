@@ -3,11 +3,11 @@ import type { EquityArchive } from '../archive/archive-service.js'
 import type { EquityDataEngine } from '../data/data-engine.js'
 import { EquityModelEngine } from '../model-engine/service.js'
 import { createEquityResearchTools } from '../tools/research-tools.js'
-import { registerEquityResearchTools } from '../tools/harness.js'
+import { getHarnessToolRegistry, registerEquityResearchTools } from '../tools/harness.js'
 import { researchToolDefinitions } from '../tools/schema.js'
 
 export const name = 'conte-equity-model-engine'
-export const inject = ['equityArchive', 'equityDataEngine', 'tools'] as const
+export const inject = ['equityArchive'] as const
 
 declare module 'cordis' { interface Context { equityModelEngine: EquityModelEngine; equityResearchTools: ReturnType<typeof createEquityResearchTools>; equityResearchToolDefinitions: typeof researchToolDefinitions } }
 
@@ -20,7 +20,26 @@ export function apply(ctx: Context, _config: unknown): void {
   ctx.reflect.provide('equityModelEngine', modelEngine)
   ctx.reflect.provide('equityResearchTools', tools)
   ctx.reflect.provide('equityResearchToolDefinitions', researchToolDefinitions)
-  registerEquityResearchTools(ctx, tools)
+
+  let registeredRegistry: ReturnType<typeof getHarnessToolRegistry>
+  let disposers: Array<() => void> = []
+  const clearRegistrations = (): void => {
+    for (const dispose of disposers.splice(0).reverse()) dispose()
+    registeredRegistry = undefined
+  }
+  const syncRegistrations = (): void => {
+    const registry = getHarnessToolRegistry(ctx)
+    if (registry === registeredRegistry) return
+    clearRegistrations()
+    if (!registry) return
+    disposers = registerEquityResearchTools(ctx, tools)
+    registeredRegistry = registry
+  }
+  syncRegistrations()
+  ctx.on('internal/service', (serviceName) => {
+    if (serviceName === 'tools') syncRegistrations()
+  })
+  ctx.effect(() => clearRegistrations)
 }
 
 export * from '../model-engine/service.js'

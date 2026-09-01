@@ -602,70 +602,38 @@ export class EquityDataEngine {
   }
 
   createFact(companyId: string, input: FactInput): string {
-    validateDate(input.periodEnd, 'periodEnd')
-    if (input.periodType === 'duration') {
-      if (!input.periodStart) throw new Error('duration facts require periodStart')
-      validateDate(input.periodStart, 'periodStart')
-      if (input.periodStart > input.periodEnd) throw new Error('periodStart must not be after periodEnd')
-    } else if (input.periodStart) throw new Error('instant facts must not have periodStart')
-    if (!input.evidenceIds.length) throw new Error('facts require at least one local Evidence')
-
+    validateFactShape(input)
     return this.archive.withDatabase(companyId, (database) => {
-      const metric = database.prepare(`SELECT metric_id, value_type, period_behavior, allowed_dimensions_json
-        FROM metric_definitions WHERE metric_id = ? AND active = 1`).get(input.metricId) as {
-          metric_id: string; value_type: 'number' | 'text' | 'boolean'; period_behavior: 'duration' | 'instant'; allowed_dimensions_json: string
-        } | undefined
-      if (!metric) throw new Error(`Unknown active metric definition: ${input.metricId}`)
-      if (metric.period_behavior !== input.periodType) throw new Error(`Metric ${input.metricId} requires ${metric.period_behavior} period`) 
-      const dimensions = input.dimensions ?? null
-      const allowed = JSON.parse(metric.allowed_dimensions_json) as string[]
-      if (dimensions && Object.keys(dimensions).some((key) => !allowed.includes(key))) {
-        throw new Error(`Metric ${input.metricId} does not allow one or more dimensions`)
-      }
-      const valueColumns = valueColumnsFor(metric.value_type, input.value)
-      for (const evidenceId of input.evidenceIds) {
-        const evidence = database.prepare('SELECT evidence_id FROM evidence WHERE evidence_id = ?').get(evidenceId)
-        if (!evidence) throw new Error(`Unknown Evidence: ${evidenceId}`)
-      }
-      if (input.companyIndustryId) assertCompanyIndustry(database, companyId, input.companyIndustryId)
-      if (input.businessLineId) assertBusinessLine(database, companyId, input.businessLineId, input.companyIndustryId)
-      const factId = `fact-${randomUUID()}`
-      let targetFactId = factId
+      const valueColumns = validateFactForDatabase(database, companyId, input)
       const now = new Date().toISOString()
       database.exec('BEGIN IMMEDIATE')
       try {
-        const existing = database.prepare(`SELECT fact_id FROM facts
-          WHERE metric_id = ? AND company_industry_id IS ? AND business_line_id IS ?
-            AND period_type = ? AND period_start IS ? AND period_end = ? AND dimensions_json IS ?`).get(
-          input.metricId, input.companyIndustryId ?? null, input.businessLineId ?? null, input.periodType,
-          input.periodStart ?? null, input.periodEnd, dimensions ? JSON.stringify(dimensions) : null,
-        ) as { fact_id: string } | undefined
-        targetFactId = existing?.fact_id ?? factId
-        if (existing) {
-          database.prepare(`UPDATE facts SET value_number = ?, value_text = ?, value_boolean = ?, unit = ?, source_reported_at = ?, observed_at = ?, ingestion_method = ?, verification_status = ?, updated_at = ? WHERE fact_id = ?`).run(
-            valueColumns.number, valueColumns.text, valueColumns.boolean, input.unit ?? null, input.sourceReportedAt ?? null,
-            input.observedAt ?? null, input.ingestionMethod, input.verificationStatus, now, targetFactId,
-          )
-          database.prepare('DELETE FROM fact_evidence WHERE fact_id = ?').run(targetFactId)
-        } else database.prepare(`INSERT INTO facts (
-          fact_id, metric_id, company_industry_id, business_line_id, period_type, period_start,
-          period_end, value_number, value_text, value_boolean, unit, source_reported_at,
-          observed_at, dimensions_json, ingestion_method, verification_status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          factId, input.metricId, input.companyIndustryId ?? null, input.businessLineId ?? null,
-          input.periodType, input.periodStart ?? null, input.periodEnd, valueColumns.number,
-          valueColumns.text, valueColumns.boolean, input.unit ?? null, input.sourceReportedAt ?? null,
-          input.observedAt ?? null, dimensions ? JSON.stringify(dimensions) : null,
-          input.ingestionMethod, input.verificationStatus, now, now,
-        )
-        const link = database.prepare('INSERT INTO fact_evidence (fact_id, evidence_id) VALUES (?, ?)')
-        for (const evidenceId of input.evidenceIds) link.run(targetFactId, evidenceId)
+        const targetFactId = writeFact(database, input, valueColumns, now)
         database.exec('COMMIT')
+        return targetFactId
       } catch (error) {
         database.exec('ROLLBACK')
         throw error
       }
-      return targetFactId
+    })
+  }
+
+  createFactsBatch(companyId: string, inputs: FactInput[]): string[] {
+    if (!inputs.length) return []
+    inputs.forEach(validateFactShape)
+    return this.archive.withDatabase(companyId, (database) => {
+      // Validate every row before opening the write transaction so a bad later row cannot leave a partial import.
+      const prepared = inputs.map((input) => ({ input, valueColumns: validateFactForDatabase(database, companyId, input) }))
+      const now = new Date().toISOString()
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const factIds = prepared.map(({ input, valueColumns }) => writeFact(database, input, valueColumns, now))
+        database.exec('COMMIT')
+        return factIds
+      } catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
     })
   }
 
@@ -706,6 +674,75 @@ export class EquityDataEngine {
       }))
     })
   }
+}
+
+function validateFactShape(input: FactInput): void {
+  validateDate(input.periodEnd, 'periodEnd')
+  if (input.periodType === 'duration') {
+    if (!input.periodStart) throw new Error('duration facts require periodStart')
+    validateDate(input.periodStart, 'periodStart')
+    if (input.periodStart > input.periodEnd) throw new Error('periodStart must not be after periodEnd')
+  } else if (input.periodStart) throw new Error('instant facts must not have periodStart')
+  if (!input.evidenceIds.length) throw new Error('facts require at least one local Evidence')
+}
+
+function validateFactForDatabase(database: DatabaseSync, companyId: string, input: FactInput): { number: number | null; text: string | null; boolean: number | null } {
+  const metric = database.prepare(`SELECT value_type, period_behavior, allowed_dimensions_json
+    FROM metric_definitions WHERE metric_id = ? AND active = 1`).get(input.metricId) as {
+      value_type: 'number' | 'text' | 'boolean'; period_behavior: 'duration' | 'instant'; allowed_dimensions_json: string
+    } | undefined
+  if (!metric) throw new Error(`Unknown active metric definition: ${input.metricId}`)
+  if (metric.period_behavior !== input.periodType) throw new Error(`Metric ${input.metricId} requires ${metric.period_behavior} period`)
+  const dimensions = input.dimensions
+  const allowed = JSON.parse(metric.allowed_dimensions_json) as string[]
+  if (dimensions && Object.keys(dimensions).some((key) => !allowed.includes(key))) {
+    throw new Error(`Metric ${input.metricId} does not allow one or more dimensions`)
+  }
+  const valueColumns = valueColumnsFor(metric.value_type, input.value)
+  for (const evidenceId of input.evidenceIds) {
+    const evidence = database.prepare('SELECT evidence_id FROM evidence WHERE evidence_id = ?').get(evidenceId)
+    if (!evidence) throw new Error(`Unknown Evidence: ${evidenceId}`)
+  }
+  if (input.companyIndustryId) assertCompanyIndustry(database, companyId, input.companyIndustryId)
+  if (input.businessLineId) assertBusinessLine(database, companyId, input.businessLineId, input.companyIndustryId)
+  return valueColumns
+}
+
+function writeFact(
+  database: DatabaseSync,
+  input: FactInput,
+  valueColumns: { number: number | null; text: string | null; boolean: number | null },
+  now: string,
+): string {
+  const factId = `fact-${randomUUID()}`
+  let targetFactId = factId
+  const existing = database.prepare(`SELECT fact_id FROM facts
+    WHERE metric_id = ? AND company_industry_id IS ? AND business_line_id IS ?
+      AND period_type = ? AND period_start IS ? AND period_end = ? AND dimensions_json IS ?`).get(
+    input.metricId, input.companyIndustryId ?? null, input.businessLineId ?? null, input.periodType,
+    input.periodStart ?? null, input.periodEnd, input.dimensions ? JSON.stringify(input.dimensions) : null,
+  ) as { fact_id: string } | undefined
+  targetFactId = existing?.fact_id ?? factId
+  if (existing) {
+    database.prepare(`UPDATE facts SET value_number = ?, value_text = ?, value_boolean = ?, unit = ?, source_reported_at = ?, observed_at = ?, ingestion_method = ?, verification_status = ?, updated_at = ? WHERE fact_id = ?`).run(
+      valueColumns.number, valueColumns.text, valueColumns.boolean, input.unit ?? null, input.sourceReportedAt ?? null,
+      input.observedAt ?? null, input.ingestionMethod, input.verificationStatus, now, targetFactId,
+    )
+    database.prepare('DELETE FROM fact_evidence WHERE fact_id = ?').run(targetFactId)
+  } else database.prepare(`INSERT INTO facts (
+    fact_id, metric_id, company_industry_id, business_line_id, period_type, period_start,
+    period_end, value_number, value_text, value_boolean, unit, source_reported_at,
+    observed_at, dimensions_json, ingestion_method, verification_status, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    factId, input.metricId, input.companyIndustryId ?? null, input.businessLineId ?? null,
+    input.periodType, input.periodStart ?? null, input.periodEnd, valueColumns.number,
+    valueColumns.text, valueColumns.boolean, input.unit ?? null, input.sourceReportedAt ?? null,
+    input.observedAt ?? null, input.dimensions ? JSON.stringify(input.dimensions) : null,
+    input.ingestionMethod, input.verificationStatus, now, now,
+  )
+  const link = database.prepare('INSERT INTO fact_evidence (fact_id, evidence_id) VALUES (?, ?)')
+  for (const evidenceId of input.evidenceIds) link.run(targetFactId, evidenceId)
+  return targetFactId
 }
 
 function valueColumnsFor(valueType: 'number' | 'text' | 'boolean', value: number | string | boolean): {

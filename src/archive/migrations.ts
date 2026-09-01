@@ -377,6 +377,18 @@ export const migrations: readonly Migration[] = [
     version: 8,
     name: 'natural_keys_for_temporal_imports',
     sql: `
+      DELETE FROM role_assignments
+      WHERE assignment_id NOT IN (
+        SELECT MIN(assignment_id)
+        FROM role_assignments
+        GROUP BY company_id, person_id, position_id, start_date, ifnull(end_date, '')
+      );
+      DELETE FROM captable_snapshots
+      WHERE captable_snapshot_id NOT IN (
+        SELECT MIN(captable_snapshot_id)
+        FROM captable_snapshots
+        GROUP BY company_id, as_of_date
+      );
       CREATE UNIQUE INDEX role_assignments_natural_key_idx
         ON role_assignments(company_id, person_id, position_id, start_date, ifnull(end_date, ''));
       DROP INDEX captable_snapshots_company_date_idx;
@@ -388,6 +400,12 @@ export const migrations: readonly Migration[] = [
     version: 9,
     name: 'reporting_line_natural_keys',
     sql: `
+      DELETE FROM reporting_lines
+      WHERE reporting_line_id NOT IN (
+        SELECT MIN(reporting_line_id)
+        FROM reporting_lines
+        GROUP BY company_id, subordinate_position_id, manager_position_id, start_date, ifnull(end_date, ''), relationship_type
+      );
       CREATE UNIQUE INDEX reporting_lines_natural_key_idx
         ON reporting_lines(company_id, subordinate_position_id, manager_position_id, start_date, ifnull(end_date, ''), relationship_type);
     `,

@@ -19,7 +19,7 @@ export function importFactsCsvText(csv: string, archive: EquityArchive, companyI
 function importFactRows(rows: FactCsvRow[], archive: EquityArchive, companyId: string, apply: boolean): { imported: number; factIds: string[] } {
   if (!apply) return { imported: 0, factIds: [] }
   const engine = new EquityDataEngine(archive)
-  const factIds = rows.map((row) => engine.createFact(companyId, row))
+  const factIds = engine.createFactsBatch(companyId, rows)
   return { imported: factIds.length, factIds }
 }
 

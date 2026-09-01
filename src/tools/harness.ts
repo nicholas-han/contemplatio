@@ -25,6 +25,15 @@ export interface ContextWithTools extends Context {
   tools?: HarnessToolRegistry
 }
 
+export function getHarnessToolRegistry(ctx: Context): HarnessToolRegistry | undefined {
+  // Tests and standalone hosts may attach the registry directly to Context.
+  if (Object.prototype.hasOwnProperty.call(ctx, 'tools')) {
+    const direct = (ctx as ContextWithTools).tools
+    if (direct) return direct
+  }
+  return ctx.reflect.get('tools', false) as HarnessToolRegistry | undefined
+}
+
 /**
  * Register the high-level research tools when the host supplies the Harness
  * `tools` service. The returned disposers are owned by the Cordis plugin
@@ -35,7 +44,7 @@ export function registerEquityResearchTools(
   tools: EquityResearchTools,
   definitions: readonly ResearchToolDefinition[] = researchToolDefinitions,
 ): Array<() => void> {
-  const registry = (ctx as ContextWithTools).tools
+  const registry = getHarnessToolRegistry(ctx)
   if (!registry) return []
   return definitions.map((definition) => {
     const handler = handlerFor(definition.name, tools)

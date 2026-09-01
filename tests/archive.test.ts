@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { Context } from 'cordis'
 import { EquityArchive } from '../src/archive/archive-service.js'
+import { migrateDatabase, migrations } from '../src/archive/migrations.js'
 import { companyManifestSchema, type CompanyManifest } from '../src/domain/company.js'
 import { applyMetricPack } from '../src/metric-packs/apply.js'
 import { coalPack } from '../src/metric-packs/coal/index.js'
@@ -18,8 +20,9 @@ import { createEquityResearchTools } from '../src/tools/research-tools.js'
 import { importManagementCsvText, parseManagementCsv } from '../src/import/management.js'
 import { importCapTableCsvText, parseCapTableCsv } from '../src/import/cap-table.js'
 import { parseEstimatesCsv } from '../src/import/estimates.js'
-import { parseFactsCsv } from '../src/import/facts.js'
+import { importFactsCsvText, parseFactsCsv } from '../src/import/facts.js'
 import { researchToolDefinitions } from '../src/tools/schema.js'
+import { EquityWebServer } from '../src/web/server.js'
 
 const manifest: CompanyManifest = {
   schema_version: '0.1',
@@ -77,6 +80,66 @@ test('model plugin registers object-shaped tools with an available Harness regis
   assert.equal(company.company_id, manifest.company_id)
   assert.equal(Object.hasOwn(getCompany.parameters, '$schema'), false)
   assert.equal(JSON.stringify(getCompany.parameters).includes('pattern'), false)
+})
+
+test('model plugin remains active without optional services and disposes Harness registrations', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'conte-optional-model-'))
+  const ctx = new Context()
+  await archivePlugin.apply(ctx, { root })
+  const registered: string[] = []
+  let disposed = 0
+  const modelFiber = ctx.plugin(modelPlugin, {})
+  await modelFiber
+  assert.equal(typeof ctx.reflect.get('equityModelEngine')?.runCoalScenario, 'function')
+  assert.equal(registered.length, 0)
+
+  const toolsDispose = ctx.reflect.provide('tools', {
+    register(definition: { name: string }) {
+      registered.push(definition.name)
+      return () => { disposed += 1 }
+    },
+  })
+  assert.equal(registered.length, researchToolDefinitions.length)
+  await modelFiber.dispose()
+  assert.equal(disposed, researchToolDefinitions.length)
+  await toolsDispose()
+})
+
+test('migrations reconcile duplicate natural keys before adding unique indexes', () => {
+  const database = new DatabaseSync(':memory:')
+  try {
+    database.exec(`PRAGMA foreign_keys = ON; CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL) STRICT;`)
+    const record = database.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+    for (const migration of migrations.slice(0, 7)) {
+      database.exec(migration.sql)
+      record.run(migration.version, migration.name, new Date().toISOString())
+    }
+    const now = new Date().toISOString()
+    database.prepare(`INSERT INTO companies (company_id, name_en, jurisdiction, accounting_standard, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run('test-co', 'Test Co', 'CN', 'CAS', now, now)
+    database.prepare(`INSERT INTO people (person_id, name_en, created_at, updated_at) VALUES (?, ?, ?, ?)`).run('person-1', 'Person One', now, now)
+    database.prepare(`INSERT INTO positions (position_id, company_id, role_title_raw) VALUES (?, ?, ?)`).run('position-1', 'test-co', 'CEO')
+    database.prepare(`INSERT INTO positions (position_id, company_id, role_title_raw) VALUES (?, ?, ?)`).run('position-2', 'test-co', 'Chairman')
+    const assignment = database.prepare(`INSERT INTO role_assignments (assignment_id, company_id, person_id, position_id, start_date) VALUES (?, ?, ?, ?, ?)`)
+    assignment.run('assignment-1', 'test-co', 'person-1', 'position-1', '2025-01-01')
+    assignment.run('assignment-2', 'test-co', 'person-1', 'position-1', '2025-01-01')
+    const reportingLine = database.prepare(`INSERT INTO reporting_lines (reporting_line_id, company_id, subordinate_position_id, manager_position_id, relationship_type, start_date) VALUES (?, ?, ?, ?, ?, ?)`)
+    reportingLine.run('line-1', 'test-co', 'position-1', 'position-2', 'solid', '2025-01-01')
+    reportingLine.run('line-2', 'test-co', 'position-1', 'position-2', 'solid', '2025-01-01')
+    database.prepare(`INSERT INTO share_classes (share_class_id, company_id, name, security_type) VALUES (?, ?, ?, ?)`).run('class-1', 'test-co', 'A shares', 'common_equity')
+    const snapshot = database.prepare(`INSERT INTO captable_snapshots (captable_snapshot_id, company_id, as_of_date, created_at) VALUES (?, ?, ?, ?)`)
+    snapshot.run('snapshot-1', 'test-co', '2025-12-31', now)
+    snapshot.run('snapshot-2', 'test-co', '2025-12-31', now)
+    database.prepare(`INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding) VALUES (?, ?, ?)`).run('snapshot-2', 'class-1', 100)
+
+    assert.doesNotThrow(() => migrateDatabase(database))
+    assert.equal((database.prepare('SELECT count(*) AS count FROM role_assignments').get() as { count: number }).count, 1)
+    assert.equal((database.prepare('SELECT count(*) AS count FROM reporting_lines').get() as { count: number }).count, 1)
+    assert.equal((database.prepare('SELECT count(*) AS count FROM captable_snapshots').get() as { count: number }).count, 1)
+    assert.equal((database.prepare('SELECT count(*) AS count FROM captable_class_totals').get() as { count: number }).count, 0)
+    assert.equal((database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count, 9)
+  } finally {
+    database.close()
+  }
 })
 
 test('company initialization creates an inspectable workspace and applies migrations once', async () => {
@@ -255,6 +318,62 @@ test('data engine validates and queries facts through the archive boundary', asy
     value: 10, dimensions: { unsupported: 'x' }, evidenceIds: ['evidence-fact'],
     ingestionMethod: 'test', verificationStatus: 'confirmed',
   }), /does not allow/)
+})
+
+test('Facts CSV import rolls back the whole batch when a later row is invalid', async () => {
+  const { archive } = await createArchive()
+  await archive.createCompany(manifest)
+  const now = new Date().toISOString()
+  archive.withDatabase(manifest.company_id, (database) => {
+    applyMetricPack(database, coalPack)
+    database.prepare(`INSERT INTO sources (source_id, source_type, title, publisher, created_at) VALUES (?, ?, ?, ?, ?)`).run('source-facts-import', 'filing', 'Facts import fixture', 'Test publisher', now)
+  })
+  const artifact = await archive.storeArtifact(manifest.company_id, 'Production: 10 tonnes\n', {
+    artifactId: 'artifact-facts-import', sourceId: 'source-facts-import', artifactKind: 'original',
+    mediaType: 'text/markdown', category: 'filings', fileName: 'facts.md', originalRetained: true,
+  })
+  archive.withDatabase(manifest.company_id, (database) => {
+    database.prepare(`INSERT INTO evidence (evidence_id, artifact_id, locator_type, locator_json, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+      'evidence-facts-import', artifact.artifactId, 'markdown', JSON.stringify({ line_start: 1, line_end: 1 }), now,
+    )
+  })
+  const csv = [
+    'metric_id,period_type,period_start,period_end,value,unit,evidence_id',
+    'coal.production,duration,2025-01-01,2025-12-31,10,tonne,evidence-facts-import',
+    'unknown.metric,duration,2025-01-01,2025-12-31,20,tonne,evidence-facts-import',
+  ].join('\n')
+  assert.throws(() => importFactsCsvText(csv, archive, manifest.company_id, true), /Unknown active metric definition: unknown\.metric/)
+  assert.equal(new EquityDataEngine(archive).listFacts(manifest.company_id).length, 0)
+})
+
+test('web workbench keeps legacy evidence links scoped and preserves import submitters', async () => {
+  const { archive } = await createArchive()
+  await archive.createCompany(manifest)
+  const now = new Date().toISOString()
+  archive.withDatabase(manifest.company_id, (database) => {
+    database.prepare(`INSERT INTO sources (source_id, source_type, title, publisher, created_at) VALUES (?, ?, ?, ?, ?)`).run('source-legacy-web', 'manual', 'Legacy web fixture', 'Test publisher', now)
+  })
+  const artifact = await archive.storeArtifact(manifest.company_id, 'Legacy observation\n', {
+    artifactId: 'artifact-legacy-web', sourceId: 'source-legacy-web', artifactKind: 'curated',
+    mediaType: 'text/markdown', category: 'curated', fileName: 'legacy.md', originalRetained: false,
+  })
+  archive.withDatabase(manifest.company_id, (database) => {
+    database.prepare(`INSERT INTO evidence (evidence_id, artifact_id, locator_type, locator_json, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+      'evidence-legacy-web', artifact.artifactId, 'markdown', JSON.stringify({ line_start: 1, line_end: 1 }), now,
+    )
+    database.prepare(`INSERT INTO legacy_observations (observation_id, entity_id, legacy_metric_id, period_kind, value_nature, review_status, evidence_id, imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      'observation-legacy-web', manifest.company_id, 'legacy.revenue', 'FY', '10', 'unreviewed', 'evidence-legacy-web', now,
+    )
+  })
+  const server = new EquityWebServer(new EquityDataEngine(archive), { companyId: manifest.company_id })
+  const address = await server.start('127.0.0.1', 0)
+  try {
+    const html = await (await fetch(`http://${address.host}:${address.port}/companies/${manifest.company_id}`)).text()
+    assert.match(html, /\/api\/evidence\/evidence-legacy-web\?company_id=yankuang-energy/)
+    assert.match(html, /event\.submitter/)
+  } finally {
+    await server.close()
+  }
 })
 
 test('coal model calculates and persists historical model runs', async () => {
