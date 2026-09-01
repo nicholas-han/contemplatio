@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -18,6 +18,7 @@ import { createEquityResearchTools } from '../src/tools/research-tools.js'
 import { importManagementCsvText, parseManagementCsv } from '../src/import/management.js'
 import { importCapTableCsvText, parseCapTableCsv } from '../src/import/cap-table.js'
 import { parseEstimatesCsv } from '../src/import/estimates.js'
+import { parseFactsCsv } from '../src/import/facts.js'
 import { researchToolDefinitions } from '../src/tools/schema.js'
 
 const manifest: CompanyManifest = {
@@ -57,6 +58,25 @@ test('model plugin provides high-level research tools', async () => {
   modelPlugin.apply(ctx, {})
   assert.equal(typeof ctx.reflect.get('equityResearchTools')?.getEstimates, 'function')
   assert.ok((ctx.reflect.get('equityResearchToolDefinitions') as typeof researchToolDefinitions).some((tool) => tool.name === 'runSotp'))
+})
+
+test('model plugin registers object-shaped tools with an available Harness registry', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'conte-harness-tools-'))
+  const ctx = new Context()
+  await archivePlugin.apply(ctx, { root })
+  await ctx.reflect.get('equityArchive').createCompany(manifest)
+  const registered: Array<{ name: string; parameters: Record<string, unknown>; execute(args: unknown, exec: unknown): Promise<unknown> }> = []
+  ;(ctx as Context & { tools?: unknown }).tools = {
+    register(definition: typeof registered[number]) { registered.push(definition); return () => {} },
+  }
+  modelPlugin.apply(ctx, {})
+  assert.equal(registered.length, researchToolDefinitions.length)
+  assert.ok(registered.some((tool) => tool.name === 'saveScenario'))
+  const getCompany = registered.find((tool) => tool.name === 'getCompany')!
+  const company = await getCompany.execute({ companyId: manifest.company_id }, {}) as { company_id: string }
+  assert.equal(company.company_id, manifest.company_id)
+  assert.equal(Object.hasOwn(getCompany.parameters, '$schema'), false)
+  assert.equal(JSON.stringify(getCompany.parameters).includes('pattern'), false)
 })
 
 test('company initialization creates an inspectable workspace and applies migrations once', async () => {
@@ -131,7 +151,8 @@ test('retained artifact provenance remains valid after copying a company workspa
   })
 
   const copiedRoot = await mkdtemp(join(tmpdir(), 'conte-copy-'))
-  await cp(join(root, manifest.company_id), join(copiedRoot, manifest.company_id), { recursive: true })
+  const exportedPath = await archive.exportCompany(manifest.company_id, copiedRoot)
+  assert.equal(exportedPath, join(copiedRoot, manifest.company_id))
   const copiedArchive = new EquityArchive({ root: copiedRoot })
   const copiedCompany = await copiedArchive.openCompany(manifest.company_id)
   assert.equal(copiedCompany.manifest.name_en, manifest.name_en)
@@ -146,6 +167,8 @@ test('retained artifact provenance remains valid after copying a company workspa
   const copiedArtifact = await copiedArchive.resolveArtifact(manifest.company_id, artifact.artifactId)
   await writeFile(copiedArtifact, 'tampered')
   assert.equal(await copiedArchive.verifyArtifact(manifest.company_id, artifact.artifactId), false)
+  const audit = await archive.auditCompany(manifest.company_id)
+  assert.deepEqual({ artifactCount: audit.artifactCount, validArtifactCount: audit.validArtifactCount, ok: audit.ok }, { artifactCount: 1, validArtifactCount: 1, ok: true })
 })
 
 test('database constraints enforce known metrics and local artifact evidence', async () => {
@@ -195,6 +218,7 @@ test('data engine validates and queries facts through the archive boundary', asy
     ingestionMethod: 'test', verificationStatus: 'confirmed',
   })
   assert.equal(engine.getFact(manifest.company_id, factId).value, 10)
+  assert.equal(engine.listFactEvidence(manifest.company_id, factId)[0]?.evidenceId, 'evidence-fact')
   assert.equal(engine.getFact(manifest.company_id, factId).companyIndustryId, null)
   assert.equal(engine.listArtifacts(manifest.company_id)[0]?.artifactId, artifact.artifactId)
   assert.throws(() => engine.listFacts(manifest.company_id, { limit: 0 }), /positive integer/)
@@ -263,7 +287,22 @@ test('management and cap table CSV parsers preserve temporal input', () => {
   assert.throws(() => parseManagementCsv('name_en,role_title_raw,start_date\nAlice,CFO,2024-02-30'), /ISO date/)
   assert.throws(() => parseCapTableCsv('as_of_date,share_class_name,security_type,shares_outstanding\n2025-13-31,A,common_equity,1'), /ISO date/)
   assert.throws(() => parseEstimatesCsv('metric_id,target_period_type,target_period_end,as_of,provider,estimate_type,value,evidence_id\ncoal.production,duration,2026-12-31,2026-07-01,Desk,base,1,evidence'), /target_period_start/)
+  const facts = parseFactsCsv('metric_id,period_type,period_start,period_end,value,evidence_id\ncoal.production,duration,2025-01-01,2025-12-31,10,evidence')
+  assert.equal(facts[0]?.value, 10)
+  assert.throws(() => parseFactsCsv('metric_id,period_type,period_end,value,evidence_id\ncoal.production,duration,2025-12-31,10,evidence'), /period_start/)
+  assert.throws(() => parseFactsCsv('metric_id,period_type,period_start,period_end,value,evidence_id\ncoal.production,duration,2025-02-30,2025-12-31,10,evidence'), /ISO date/)
   assert.ok(researchToolDefinitions.some((tool) => tool.name === 'getCapTable'))
+})
+
+test('data engine can create retained provenance records without raw SQL', async () => {
+  const { archive } = await createArchive()
+  await archive.createCompany(manifest)
+  const engine = new EquityDataEngine(archive)
+  const sourceId = engine.createSource(manifest.company_id, { sourceType: 'filing', title: 'Annual report', publisher: 'Test issuer' })
+  const artifact = await engine.storeArtifact(manifest.company_id, 'Revenue: 100\n', { sourceId, artifactKind: 'curated', mediaType: 'text/markdown', category: 'curated', fileName: 'annual.md', originalRetained: false, transformationMethod: 'manual_edit' })
+  const evidenceId = engine.createEvidence(manifest.company_id, { artifactId: artifact.artifactId, locatorType: 'markdown', locator: { line_start: 1, line_end: 1 }, excerptText: 'Revenue: 100' })
+  assert.equal(engine.listSources(manifest.company_id)[0]?.sourceId, sourceId)
+  assert.equal(engine.getEvidence(manifest.company_id, evidenceId).artifactId, artifact.artifactId)
 })
 
 test('domain imports are idempotent for repeated management and cap table files', async () => {

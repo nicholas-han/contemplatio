@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import type { EquityArchive } from '../archive/archive-service.js'
+import type { ArtifactMetadata, EquityArchive, StoredArtifact } from '../archive/archive-service.js'
 import { applyMetricPack as applyMetricPackToDatabase } from '../metric-packs/apply.js'
 import type { MetricPack } from '../metric-packs/types.js'
 
@@ -87,8 +87,13 @@ export interface ShareClassRecord { shareClassId: string; name: string; security
 export interface CapTableSnapshotRecord { snapshotId: string; asOfDate: string; shareClasses: Array<ShareClassRecord & { sharesOutstanding: number; percentageOfTotalEquity: number | null }>; positions: Array<{ holderName: string; holderId: string | null; shareClassId: string; shares: number | null; ownershipPct: number | null; rank: number | null }> }
 export interface SourceRecord { sourceId: string; sourceType: string; title: string; publisher: string; publishedAt: string | null; originalUrl: string | null }
 export interface ArtifactRecord { artifactId: string; sourceId: string; artifactKind: string; mediaType: string; localPath: string; sha256: string; originalRetained: boolean; transformationMethod: string | null }
+export interface SourceInput { sourceType: 'filing' | 'earnings' | 'company_release' | 'analyst_report' | 'media' | 'api' | 'manual' | 'other'; title: string; publisher: string; author?: string; publishedAt?: string; accessedAt?: string; originalUrl?: string; accountingStandard?: string; upstreamSourceId?: string; notes?: string }
+export interface EvidenceInput { artifactId: string; locatorType: 'pdf' | 'markdown' | 'spreadsheet' | 'api' | 'other'; locator: Record<string, unknown>; excerptText?: string; notes?: string }
 export interface OrganizationUnitRecord { organizationUnitId: string; name: string; unitType: string; parentUnitId: string | null }
 export interface MetricDefinitionRecord { metricId: string; namespace: string; name: string; labelZh: string | null; labelEn: string | null; category: string; valueType: string; canonicalUnit: string | null; periodBehavior: string; aggregationRule: string | null; originPackId: string; originPackVersion: string; allowedDimensions: string[] }
+export interface ScenarioRecord { scenarioId: string; name: string; modelId: string; modelVersion: string; parameters: Record<string, unknown>; updatedAt: string }
+export interface DataModelRunRecord { modelRunId: string; modelId: string; runAt: string; inputs: Record<string, unknown>; outputs: Record<string, unknown> }
+export interface ModelRunInput { modelRunId: string; modelId: string; modelVersion?: string; scenarioId?: string; inputs: Record<string, unknown>; outputs: Record<string, unknown>; notes?: string }
 
 export interface FactFilter {
   metricId?: string
@@ -344,11 +349,7 @@ export class EquityDataEngine {
     return this.archive.withDatabase(companyId, (database) => {
       const row = database.prepare('SELECT evidence_id, artifact_id, locator_type, locator_json, excerpt_text, notes FROM evidence WHERE evidence_id = ?').get(evidenceId) as Record<string, unknown> | undefined
       if (!row) throw new Error(`Unknown Evidence: ${evidenceId}`)
-      return {
-        evidenceId: String(row.evidence_id), artifactId: String(row.artifact_id), locatorType: String(row.locator_type),
-        locator: JSON.parse(String(row.locator_json)) as Record<string, unknown>,
-        excerptText: row.excerpt_text ? String(row.excerpt_text) : null, notes: row.notes ? String(row.notes) : null,
-      }
+      return toEvidenceRecord(row)
     })
   }
 
@@ -490,11 +491,113 @@ export class EquityDataEngine {
     })))
   }
 
+  createSource(companyId: string, input: SourceInput): string {
+    if (!input.title.trim() || !input.publisher.trim()) throw new Error('source requires title and publisher')
+    return this.archive.withDatabase(companyId, (database) => {
+      assertCompany(database, companyId)
+      if (input.upstreamSourceId && !database.prepare('SELECT source_id FROM sources WHERE source_id = ?').get(input.upstreamSourceId)) throw new Error(`Unknown upstream source: ${input.upstreamSourceId}`)
+      const sourceId = `source-${randomUUID()}`
+      database.prepare(`INSERT INTO sources (source_id, source_type, title, publisher, author, published_at, accessed_at, original_url, accounting_standard, upstream_source_id, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        sourceId, input.sourceType, input.title.trim(), input.publisher.trim(), input.author ?? null, input.publishedAt ?? null,
+        input.accessedAt ?? null, input.originalUrl ?? null, input.accountingStandard ?? null, input.upstreamSourceId ?? null,
+        input.notes ?? null, new Date().toISOString(),
+      )
+      return sourceId
+    })
+  }
+
+  async storeArtifact(companyId: string, content: string | Uint8Array | { sourcePath: string }, metadata: ArtifactMetadata): Promise<StoredArtifact> {
+    return this.archive.storeArtifact(companyId, content, metadata)
+  }
+
+  createEvidence(companyId: string, input: EvidenceInput): string {
+    if (!input.locator || typeof input.locator !== 'object' || Array.isArray(input.locator)) throw new Error('evidence locator must be an object')
+    let locatorJson: string
+    try { locatorJson = JSON.stringify(input.locator) } catch { throw new Error('evidence locator must be JSON serializable') }
+    return this.archive.withDatabase(companyId, (database) => {
+      assertCompany(database, companyId)
+      if (!database.prepare('SELECT artifact_id FROM source_artifacts WHERE artifact_id = ?').get(input.artifactId)) throw new Error(`Unknown artifact: ${input.artifactId}`)
+      const evidenceId = `evidence-${randomUUID()}`
+      database.prepare(`INSERT INTO evidence (evidence_id, artifact_id, locator_type, locator_json, excerpt_text, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(evidenceId, input.artifactId, input.locatorType, locatorJson, input.excerptText ?? null, input.notes ?? null, new Date().toISOString())
+      return evidenceId
+    })
+  }
+
   listArtifacts(companyId: string): ArtifactRecord[] {
     return this.archive.withDatabase(companyId, (database) => (database.prepare(`SELECT artifact_id, source_id, artifact_kind, media_type, local_path, sha256,
       original_retained, transformation_method FROM source_artifacts ORDER BY created_at, artifact_id`).all() as Array<Record<string, unknown>>).map((row) => ({
       artifactId: String(row.artifact_id), sourceId: String(row.source_id), artifactKind: String(row.artifact_kind), mediaType: String(row.media_type),
       localPath: String(row.local_path), sha256: String(row.sha256), originalRetained: Boolean(row.original_retained), transformationMethod: row.transformation_method ? String(row.transformation_method) : null,
+    })))
+  }
+
+  listFactEvidence(companyId: string, factId: string): EvidenceRecord[] {
+    return this.archive.withDatabase(companyId, (database) => {
+      if (!database.prepare('SELECT fact_id FROM facts WHERE fact_id = ?').get(factId)) throw new Error(`Unknown fact: ${factId}`)
+      const rows = database.prepare(`SELECT e.evidence_id, e.artifact_id, e.locator_type, e.locator_json, e.excerpt_text, e.notes
+        FROM fact_evidence fe JOIN evidence e ON e.evidence_id = fe.evidence_id
+        WHERE fe.fact_id = ? ORDER BY e.evidence_id`).all(factId) as Array<Record<string, unknown>>
+      return rows.map(toEvidenceRecord)
+    })
+  }
+
+  listEstimateEvidence(companyId: string, estimateId: string): EvidenceRecord[] {
+    return this.archive.withDatabase(companyId, (database) => {
+      if (!database.prepare('SELECT estimate_id FROM estimates WHERE estimate_id = ?').get(estimateId)) throw new Error(`Unknown estimate: ${estimateId}`)
+      const rows = database.prepare(`SELECT e.evidence_id, e.artifact_id, e.locator_type, e.locator_json, e.excerpt_text, e.notes
+        FROM estimate_evidence ee JOIN evidence e ON e.evidence_id = ee.evidence_id
+        WHERE ee.estimate_id = ? ORDER BY e.evidence_id`).all(estimateId) as Array<Record<string, unknown>>
+      return rows.map(toEvidenceRecord)
+    })
+  }
+
+  saveScenario(companyId: string, input: { name: string; modelId: string; modelVersion?: string; parameters: Record<string, unknown> }): string {
+    if (!input.name.trim() || !input.modelId.trim()) throw new Error('scenario requires name and modelId')
+    return this.archive.withDatabase(companyId, (database) => {
+      assertCompany(database, companyId)
+      const scenarioId = `scenario-${randomUUID()}`
+      const now = new Date().toISOString()
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const existing = database.prepare('SELECT scenario_id FROM scenarios WHERE company_id = ? AND model_id = ? AND name = ?').get(companyId, input.modelId, input.name) as { scenario_id: string } | undefined
+        if (existing) {
+          database.prepare('UPDATE scenarios SET model_version = ?, parameters_json = ?, updated_at = ? WHERE scenario_id = ?').run(input.modelVersion ?? '0.1.0', JSON.stringify(input.parameters), now, existing.scenario_id)
+        } else {
+          database.prepare(`INSERT INTO scenarios (scenario_id, company_id, name, model_id, model_version, parameters_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(scenarioId, companyId, input.name, input.modelId, input.modelVersion ?? '0.1.0', JSON.stringify(input.parameters), now, now)
+        }
+        database.exec('COMMIT')
+        return existing?.scenario_id ?? scenarioId
+      } catch (error) { database.exec('ROLLBACK'); throw error }
+    })
+  }
+
+  listScenarios(companyId: string): ScenarioRecord[] {
+    return this.archive.withDatabase(companyId, (database) => (database.prepare(`SELECT scenario_id, name, model_id, model_version, parameters_json, updated_at
+      FROM scenarios WHERE company_id = ? ORDER BY updated_at DESC`).all(companyId) as Array<Record<string, unknown>>).map((row) => ({
+      scenarioId: String(row.scenario_id), name: String(row.name), modelId: String(row.model_id), modelVersion: String(row.model_version),
+      parameters: JSON.parse(String(row.parameters_json)) as Record<string, unknown>, updatedAt: String(row.updated_at),
+    })))
+  }
+
+  persistModelRun(companyId: string, input: ModelRunInput): void {
+    this.archive.withDatabase(companyId, (database) => {
+      assertCompany(database, companyId)
+      database.prepare(`INSERT INTO model_runs (model_run_id, company_id, model_id, model_version, scenario_id, run_at, inputs_json, outputs_json, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        input.modelRunId, companyId, input.modelId, input.modelVersion ?? '0.1.0', input.scenarioId ?? null,
+        new Date().toISOString(), JSON.stringify(input.inputs), JSON.stringify(input.outputs), input.notes ?? null,
+      )
+    })
+  }
+
+  listModelRuns(companyId: string): DataModelRunRecord[] {
+    return this.archive.withDatabase(companyId, (database) => (database.prepare(`SELECT model_run_id, model_id, run_at, inputs_json, outputs_json
+      FROM model_runs WHERE company_id = ? ORDER BY run_at DESC`).all(companyId) as Array<Record<string, unknown>>).map((row) => ({
+      modelRunId: String(row.model_run_id), modelId: String(row.model_id), runAt: String(row.run_at),
+      inputs: JSON.parse(String(row.inputs_json)) as Record<string, unknown>, outputs: JSON.parse(String(row.outputs_json)) as Record<string, unknown>,
     })))
   }
 
@@ -667,6 +770,14 @@ function toFactRecord(row: Record<string, unknown>): FactRecord {
     businessLineId: row.business_line_id ? String(row.business_line_id) : null, periodType: row.period_type as FactRecord['periodType'],
     periodStart: row.period_start ? String(row.period_start) : null, periodEnd: String(row.period_end), value,
     unit: row.unit ? String(row.unit) : null, dimensions, verificationStatus: String(row.verification_status),
+  }
+}
+
+function toEvidenceRecord(row: Record<string, unknown>): EvidenceRecord {
+  return {
+    evidenceId: String(row.evidence_id), artifactId: String(row.artifact_id), locatorType: String(row.locator_type),
+    locator: JSON.parse(String(row.locator_json)) as Record<string, unknown>,
+    excerptText: row.excerpt_text ? String(row.excerpt_text) : null, notes: row.notes ? String(row.notes) : null,
   }
 }
 
