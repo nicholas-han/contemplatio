@@ -403,6 +403,14 @@ test('web workbench keeps legacy evidence links scoped and preserves import subm
   }
 })
 
+test('web server reuses the shared model engine when provided', async () => {
+  const { archive } = await createArchive()
+  const dataEngine = new EquityDataEngine(archive)
+  const modelEngine = new EquityModelEngine(dataEngine)
+  const server = new EquityWebServer(dataEngine, { modelEngine })
+  assert.equal(server.modelEngine, modelEngine)
+})
+
 test('coal model calculates and persists historical model runs', async () => {
   const { archive } = await createArchive()
   await archive.createCompany(manifest)

@@ -9,7 +9,7 @@ import { importFactsCsvText } from '../import/facts.js'
 import { EquityModelEngine } from '../model-engine/service.js'
 import { bankPbRoeSchema, insurancePEvSchema } from '../tools/schema.js'
 
-export interface WebServerConfig { host?: string; port?: number; companyId?: string }
+export interface WebServerConfig { host?: string; port?: number; companyId?: string; modelEngine?: EquityModelEngine }
 
 export class EquityWebServer {
   private server: Server | undefined
@@ -18,7 +18,7 @@ export class EquityWebServer {
   readonly modelEngine: EquityModelEngine
   constructor(readonly dataEngine: EquityDataEngine, config: WebServerConfig = {}) {
     this.companyId = config.companyId ?? 'yankuang-energy'
-    this.modelEngine = new EquityModelEngine(dataEngine)
+    this.modelEngine = config.modelEngine ?? new EquityModelEngine(dataEngine)
   }
 
   async start(host = '127.0.0.1', port = 4173): Promise<{ host: string; port: number }> {
