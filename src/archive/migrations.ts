@@ -424,17 +424,34 @@ export const migrations: readonly Migration[] = [
       SELECT dedup.keeper_id, total.share_class_id, total.shares_outstanding, total.percentage_of_total_equity
       FROM captable_snapshot_dedup_map dedup
       JOIN captable_class_totals total ON total.captable_snapshot_id = dedup.duplicate_id;
+      CREATE TEMP TABLE captable_snapshot_class_conflicts AS
+      SELECT dedup.duplicate_id, dedup.keeper_id, duplicate_total.share_class_id
+      FROM captable_snapshot_dedup_map dedup
+      JOIN captable_class_totals duplicate_total
+        ON duplicate_total.captable_snapshot_id = dedup.duplicate_id
+      JOIN captable_class_totals keeper_total
+        ON keeper_total.captable_snapshot_id = dedup.keeper_id
+       AND keeper_total.share_class_id = duplicate_total.share_class_id
+      WHERE duplicate_total.shares_outstanding IS NOT keeper_total.shares_outstanding
+         OR duplicate_total.percentage_of_total_equity IS NOT keeper_total.percentage_of_total_equity;
       UPDATE captable_positions
       SET captable_snapshot_id = (
         SELECT dedup.keeper_id
         FROM captable_snapshot_dedup_map dedup
         WHERE dedup.duplicate_id = captable_positions.captable_snapshot_id
       )
-      WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map);
+      WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM captable_snapshot_class_conflicts conflict
+          WHERE conflict.duplicate_id = captable_positions.captable_snapshot_id
+            AND conflict.share_class_id = captable_positions.share_class_id
+        );
       DELETE FROM captable_class_totals
       WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map);
       DELETE FROM captable_snapshots
       WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map);
+      DROP TABLE captable_snapshot_class_conflicts;
       DROP TABLE captable_snapshot_dedup_map;
       CREATE UNIQUE INDEX role_assignments_natural_key_idx
         ON role_assignments(company_id, person_id, position_id, start_date, ifnull(end_date, ''));

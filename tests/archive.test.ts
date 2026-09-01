@@ -131,6 +131,8 @@ test('migrations reconcile duplicate natural keys before adding unique indexes',
     snapshot.run('snapshot-1', 'test-co', '2025-12-31', now)
     snapshot.run('snapshot-2', 'test-co', '2025-12-31', now)
     database.prepare(`INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding) VALUES (?, ?, ?)`).run('snapshot-1', 'class-1', 100)
+    database.prepare(`INSERT INTO captable_positions (captable_position_id, captable_snapshot_id, holder_name, share_class_id, shares) VALUES (?, ?, ?, ?, ?)`).run('position-1', 'snapshot-1', 'Holder One', 'class-1', 25)
+    database.prepare(`INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding) VALUES (?, ?, ?)`).run('snapshot-2', 'class-1', 150)
     database.prepare(`INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding) VALUES (?, ?, ?)`).run('snapshot-2', 'class-2', 200)
     database.prepare(`INSERT INTO captable_positions (captable_position_id, captable_snapshot_id, holder_name, share_class_id, shares) VALUES (?, ?, ?, ?, ?)`).run('position-2', 'snapshot-2', 'Holder Two', 'class-2', 50)
 
@@ -141,6 +143,8 @@ test('migrations reconcile duplicate natural keys before adding unique indexes',
     assert.equal((database.prepare('SELECT count(*) AS count FROM captable_class_totals').get() as { count: number }).count, 2)
     assert.equal((database.prepare('SELECT count(*) AS count FROM captable_positions').get() as { count: number }).count, 1)
     assert.equal((database.prepare('SELECT captable_snapshot_id FROM captable_class_totals WHERE share_class_id = ?').get('class-1') as { captable_snapshot_id: string }).captable_snapshot_id, 'snapshot-2')
+    assert.equal((database.prepare('SELECT shares_outstanding FROM captable_class_totals WHERE captable_snapshot_id = ? AND share_class_id = ?').get('snapshot-2', 'class-1') as { shares_outstanding: number }).shares_outstanding, 150)
+    assert.equal((database.prepare('SELECT share_class_id FROM captable_positions').get() as { share_class_id: string }).share_class_id, 'class-2')
     assert.equal((database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count, 9)
   } finally {
     database.close()
