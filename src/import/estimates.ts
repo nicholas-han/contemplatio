@@ -62,11 +62,19 @@ export function parseEstimatesCsv(csv: string): EstimateCsvRow[] {
       throw new Error(`Estimate CSV row ${position + 2} is missing a required value`)
     }
     if (targetPeriodType !== 'duration' && targetPeriodType !== 'instant') throw new Error(`Estimate CSV row ${position + 2} has invalid target_period_type`)
+    validateIsoDate(targetPeriodEnd, `Estimate CSV row ${position + 2} target_period_end`)
+    validateIsoDate(asOf, `Estimate CSV row ${position + 2} as_of`)
+    const targetPeriodStart = get(row, 'target_period_start')
+    if (targetPeriodType === 'duration') {
+      if (!targetPeriodStart) throw new Error(`Estimate CSV row ${position + 2} is missing target_period_start for a duration estimate`)
+      validateIsoDate(targetPeriodStart, `Estimate CSV row ${position + 2} target_period_start`)
+      if (targetPeriodStart > targetPeriodEnd) throw new Error(`Estimate CSV row ${position + 2} has target_period_start after target_period_end`)
+    } else if (targetPeriodStart) throw new Error(`Estimate CSV row ${position + 2} must not set target_period_start for an instant estimate`)
     const numericValue = Number(rawValue)
     const value: number | string = rawValue !== '' && Number.isFinite(numericValue) ? numericValue : rawValue
     return {
       metricId, targetPeriodType, targetPeriodEnd, asOf, provider, estimateType, value,
-      targetPeriodStart: get(row, 'target_period_start'), analyst: get(row, 'analyst'), unit: get(row, 'unit'),
+      ...(targetPeriodStart ? { targetPeriodStart } : {}), analyst: get(row, 'analyst'), unit: get(row, 'unit'),
       publishedAt: get(row, 'published_at'), observedAt: get(row, 'observed_at'),
       dimensions: parseDimensions(get(row, 'dimensions')), evidenceIds: evidenceId.split(';').map((id) => id.trim()).filter(Boolean),
       ingestionMethod: get(row, 'ingestion_method') ?? 'csv_import', verificationStatus: get(row, 'verification_status') ?? 'unverified',
@@ -100,4 +108,9 @@ function parseCsv(input: string): string[][] {
   }
   if (field || row.length) { row.push(field); rows.push(row) }
   return rows
+}
+
+function validateIsoDate(value: string, field: string): void {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value); const parsed = match ? new Date(`${value}T00:00:00Z`) : undefined
+  if (!match || !parsed || Number.isNaN(parsed.getTime()) || parsed.getUTCFullYear() !== Number(match[1]) || parsed.getUTCMonth() + 1 !== Number(match[2]) || parsed.getUTCDate() !== Number(match[3])) throw new Error(`${field} must be an ISO date (YYYY-MM-DD)`)
 }

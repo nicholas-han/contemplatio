@@ -328,6 +328,152 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX model_runs_company_idx ON model_runs(company_id, run_at);
     `,
   },
+  {
+    version: 7,
+    name: 'cap_table_snapshots',
+    sql: `
+      CREATE TABLE share_classes (
+        share_class_id TEXT PRIMARY KEY,
+        company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        security_type TEXT NOT NULL,
+        exchange TEXT,
+        ticker TEXT,
+        currency TEXT,
+        voting_rights_metadata TEXT CHECK (voting_rights_metadata IS NULL OR json_valid(voting_rights_metadata)),
+        active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+        UNIQUE (company_id, name)
+      ) STRICT;
+      CREATE TABLE captable_snapshots (
+        captable_snapshot_id TEXT PRIMARY KEY,
+        company_id TEXT NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
+        as_of_date TEXT NOT NULL,
+        source_id TEXT REFERENCES sources(source_id) ON DELETE RESTRICT,
+        evidence_id TEXT REFERENCES evidence(evidence_id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE captable_class_totals (
+        captable_snapshot_id TEXT NOT NULL REFERENCES captable_snapshots(captable_snapshot_id) ON DELETE CASCADE,
+        share_class_id TEXT NOT NULL REFERENCES share_classes(share_class_id) ON DELETE RESTRICT,
+        shares_outstanding REAL NOT NULL,
+        percentage_of_total_equity REAL,
+        PRIMARY KEY (captable_snapshot_id, share_class_id)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE captable_positions (
+        captable_position_id TEXT PRIMARY KEY,
+        captable_snapshot_id TEXT NOT NULL REFERENCES captable_snapshots(captable_snapshot_id) ON DELETE CASCADE,
+        holder_name TEXT NOT NULL,
+        holder_id TEXT,
+        share_class_id TEXT NOT NULL REFERENCES share_classes(share_class_id) ON DELETE RESTRICT,
+        shares REAL,
+        ownership_pct REAL,
+        rank INTEGER
+      ) STRICT;
+      CREATE INDEX captable_snapshots_company_date_idx ON captable_snapshots(company_id, as_of_date);
+      CREATE INDEX captable_positions_snapshot_idx ON captable_positions(captable_snapshot_id, rank);
+    `,
+  },
+  {
+    version: 8,
+    name: 'natural_keys_for_temporal_imports',
+    sql: `
+      DELETE FROM role_assignments
+      WHERE assignment_id NOT IN (
+        SELECT MIN(assignment_id)
+        FROM role_assignments
+        GROUP BY company_id, person_id, position_id, start_date, ifnull(end_date, '')
+      );
+      CREATE TEMP TABLE captable_snapshot_dedup_map AS
+      SELECT duplicate.captable_snapshot_id AS duplicate_id,
+        (
+          SELECT keeper.captable_snapshot_id
+          FROM captable_snapshots keeper
+          WHERE keeper.company_id = duplicate.company_id
+            AND keeper.as_of_date = duplicate.as_of_date
+          ORDER BY
+            (
+              (SELECT count(*) FROM captable_class_totals total
+               WHERE total.captable_snapshot_id = keeper.captable_snapshot_id)
+              +
+              (SELECT count(*) FROM captable_positions position
+               WHERE position.captable_snapshot_id = keeper.captable_snapshot_id)
+            ) DESC,
+            keeper.captable_snapshot_id
+          LIMIT 1
+        ) AS keeper_id
+      FROM captable_snapshots duplicate
+      WHERE duplicate.captable_snapshot_id <> (
+        SELECT keeper.captable_snapshot_id
+        FROM captable_snapshots keeper
+        WHERE keeper.company_id = duplicate.company_id
+          AND keeper.as_of_date = duplicate.as_of_date
+        ORDER BY
+          (
+            (SELECT count(*) FROM captable_class_totals total
+             WHERE total.captable_snapshot_id = keeper.captable_snapshot_id)
+            +
+            (SELECT count(*) FROM captable_positions position
+             WHERE position.captable_snapshot_id = keeper.captable_snapshot_id)
+          ) DESC,
+          keeper.captable_snapshot_id
+        LIMIT 1
+      );
+      INSERT OR IGNORE INTO captable_class_totals (
+        captable_snapshot_id, share_class_id, shares_outstanding, percentage_of_total_equity
+      )
+      SELECT dedup.keeper_id, total.share_class_id, total.shares_outstanding, total.percentage_of_total_equity
+      FROM captable_snapshot_dedup_map dedup
+      JOIN captable_class_totals total ON total.captable_snapshot_id = dedup.duplicate_id;
+      CREATE TEMP TABLE captable_snapshot_class_conflicts AS
+      SELECT dedup.duplicate_id, dedup.keeper_id, duplicate_total.share_class_id
+      FROM captable_snapshot_dedup_map dedup
+      JOIN captable_class_totals duplicate_total
+        ON duplicate_total.captable_snapshot_id = dedup.duplicate_id
+      JOIN captable_class_totals keeper_total
+        ON keeper_total.captable_snapshot_id = dedup.keeper_id
+       AND keeper_total.share_class_id = duplicate_total.share_class_id
+      WHERE duplicate_total.shares_outstanding IS NOT keeper_total.shares_outstanding
+         OR duplicate_total.percentage_of_total_equity IS NOT keeper_total.percentage_of_total_equity;
+      UPDATE captable_positions
+      SET captable_snapshot_id = (
+        SELECT dedup.keeper_id
+        FROM captable_snapshot_dedup_map dedup
+        WHERE dedup.duplicate_id = captable_positions.captable_snapshot_id
+      )
+      WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM captable_snapshot_class_conflicts conflict
+          WHERE conflict.duplicate_id = captable_positions.captable_snapshot_id
+            AND conflict.share_class_id = captable_positions.share_class_id
+        );
+      DELETE FROM captable_class_totals
+      WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map);
+      DELETE FROM captable_snapshots
+      WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map);
+      DROP TABLE captable_snapshot_class_conflicts;
+      DROP TABLE captable_snapshot_dedup_map;
+      CREATE UNIQUE INDEX role_assignments_natural_key_idx
+        ON role_assignments(company_id, person_id, position_id, start_date, ifnull(end_date, ''));
+      DROP INDEX captable_snapshots_company_date_idx;
+      CREATE UNIQUE INDEX captable_snapshots_company_date_idx
+        ON captable_snapshots(company_id, as_of_date);
+    `,
+  },
+  {
+    version: 9,
+    name: 'reporting_line_natural_keys',
+    sql: `
+      DELETE FROM reporting_lines
+      WHERE reporting_line_id NOT IN (
+        SELECT MIN(reporting_line_id)
+        FROM reporting_lines
+        GROUP BY company_id, subordinate_position_id, manager_position_id, start_date, ifnull(end_date, ''), relationship_type
+      );
+      CREATE UNIQUE INDEX reporting_lines_natural_key_idx
+        ON reporting_lines(company_id, subordinate_position_id, manager_position_id, start_date, ifnull(end_date, ''), relationship_type);
+    `,
+  },
 ]
 
 export function migrateDatabase(database: DatabaseSync): void {

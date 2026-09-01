@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { copyFile, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readFile, rename, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { companyManifestSchema, type CompanyManifest } from '../domain/company.js'
@@ -34,6 +34,17 @@ export interface OpenCompany {
   databasePath: string
 }
 
+export interface ArchiveAuditReport {
+  companyId: string
+  artifactCount: number
+  validArtifactCount: number
+  invalidArtifactIds: string[]
+  factCount: number
+  estimateCount: number
+  evidenceCount: number
+  ok: boolean
+}
+
 declare module 'cordis' {
   interface Context { equityArchive: EquityArchive }
 }
@@ -47,6 +58,16 @@ export class EquityArchive {
 
   async initialize(): Promise<void> {
     await mkdir(this.root, { recursive: true })
+  }
+
+  async listCompanies(): Promise<CompanyManifest[]> {
+    const entries = await readdir(this.root, { withFileTypes: true })
+    const manifests: CompanyManifest[] = []
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+      try { manifests.push(await this.readManifest(entry.name)) } catch { /* Ignore non-company directories. */ }
+    }
+    return manifests.sort((a, b) => a.company_id.localeCompare(b.company_id))
   }
 
   companyPath(companyId: string): string {
@@ -107,6 +128,39 @@ export class EquityArchive {
     const temporaryPath = `${manifestPath}.${randomUUID()}.tmp`
     await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
     await rename(temporaryPath, manifestPath)
+  }
+
+  /** Copy a complete self-contained workspace without overwriting an existing target. */
+  async exportCompany(companyId: string, destinationRoot: string): Promise<string> {
+    await this.openCompany(companyId)
+    const source = this.companyPath(companyId)
+    const targetRoot = resolve(destinationRoot)
+    const target = join(targetRoot, companyId)
+    if (resolve(source) === resolve(target)) throw new Error('Export destination must differ from the source workspace')
+    await mkdir(targetRoot, { recursive: true })
+    await cp(source, target, { recursive: true, force: false, errorOnExist: true })
+    return target
+  }
+
+  /** Check every retained artifact and summarize the workspace's durable records. */
+  async auditCompany(companyId: string): Promise<ArchiveAuditReport> {
+    await this.openCompany(companyId)
+    const rows = this.withDatabase(companyId, (database) => ({
+      artifacts: database.prepare('SELECT artifact_id FROM source_artifacts ORDER BY artifact_id').all() as Array<{ artifact_id: string }>,
+      facts: Number((database.prepare('SELECT count(*) AS count FROM facts').get() as { count: number }).count),
+      estimates: Number((database.prepare('SELECT count(*) AS count FROM estimates').get() as { count: number }).count),
+      evidence: Number((database.prepare('SELECT count(*) AS count FROM evidence').get() as { count: number }).count),
+    }))
+    const invalidArtifactIds: string[] = []
+    for (const row of rows.artifacts) {
+      try { if (!await this.verifyArtifact(companyId, row.artifact_id)) invalidArtifactIds.push(row.artifact_id) }
+      catch { invalidArtifactIds.push(row.artifact_id) }
+    }
+    return {
+      companyId, artifactCount: rows.artifacts.length, validArtifactCount: rows.artifacts.length - invalidArtifactIds.length,
+      invalidArtifactIds, factCount: rows.facts, estimateCount: rows.estimates, evidenceCount: rows.evidence,
+      ok: invalidArtifactIds.length === 0,
+    }
   }
 
   withDatabase<T>(companyId: string, callback: (database: DatabaseSync) => T): T {
@@ -171,6 +225,12 @@ export class EquityArchive {
     const artifactPath = resolve(workspace, row.local_path)
     if (!isWithin(workspace, artifactPath)) throw new Error(`Artifact path escapes workspace: ${row.local_path}`)
     return artifactPath
+  }
+
+  async readArtifact(companyId: string, artifactId: string): Promise<{ path: string; content: Buffer; mediaType: string }> {
+    const path = await this.resolveArtifact(companyId, artifactId)
+    const mediaType = this.withDatabase(companyId, (database) => (database.prepare('SELECT media_type FROM source_artifacts WHERE artifact_id = ?').get(artifactId) as { media_type: string }).media_type)
+    return { path, content: await readFile(path), mediaType }
   }
 
   async verifyArtifact(companyId: string, artifactId: string): Promise<boolean> {

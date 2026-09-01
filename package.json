@@ -29,6 +29,13 @@
     ,"normalize:legacy-periods": "node --env-file-if-exists=.env --import tsx scripts/normalize-legacy-periods.ts"
     ,"refresh:legacy-mappings": "node --env-file-if-exists=.env --import tsx scripts/refresh-legacy-mappings.ts"
     ,"import:estimates": "node --env-file-if-exists=.env --import tsx scripts/import-estimates.ts"
+    ,"import:management": "node --env-file-if-exists=.env --import tsx scripts/import-management.ts"
+    ,"import:cap-table": "node --env-file-if-exists=.env --import tsx scripts/import-cap-table.ts"
+    ,"import:facts": "node --env-file-if-exists=.env --import tsx scripts/import-facts.ts"
+    ,"company:create": "node --env-file-if-exists=.env --import tsx scripts/create-company.ts"
+    ,"metric-pack:apply": "node --env-file-if-exists=.env --import tsx scripts/apply-metric-pack.ts"
+    ,"archive:audit": "node --env-file-if-exists=.env --import tsx scripts/audit-archive.ts"
+    ,"archive:export": "node --env-file-if-exists=.env --import tsx scripts/export-company.ts"
   },
   "engines": {
     "node": ">=22.5"

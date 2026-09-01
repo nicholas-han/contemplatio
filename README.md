@@ -1,6 +1,6 @@
 # Contemplatio: Equity Research
 
-Local-first, company-centric equity research for DeepSeek Harness / Cordis. The current implementation covers the v0.1 bootstrap slice: portable company workspaces, manifest validation, SQLite migrations, retained artifacts, SHA-256 integrity, provenance tables, and minimal financial/coal metric packs.
+Local-first, company-centric equity research for DeepSeek Harness / Cordis. The current implementation covers the v0.1 bootstrap slice: portable company workspaces, manifest validation, SQLite migrations, retained artifacts, SHA-256 integrity, provenance tables, reusable metric packs, point-in-time estimates, management history, cap table snapshots, valuation models, and a local inspection UI.
 
 ## Requirements
 
@@ -28,6 +28,20 @@ Create the minimal Yankuang Energy workspace under the configured archive root:
 
 ```sh
 npm run seed:yankuang
+```
+
+Create another company workspace with a validated manifest. This command previews by default and only writes to the staging root with `--apply`:
+
+```sh
+npm run company:create -- --company=china-merchants-bank --name-en="China Merchants Bank" --jurisdiction=CN --accounting-standard=CAS --industry=bank --security=SSE:600036:common_equity
+npm run company:create -- --company=china-merchants-bank --name-en="China Merchants Bank" --jurisdiction=CN --accounting-standard=CAS --industry=bank --security=SSE:600036:common_equity --apply
+```
+
+Apply reusable metric packs through the Data Engine. The command previews by default and writes to the staging root only with `--apply`:
+
+```sh
+npm run metric-pack:apply -- --company=yankuang-energy --packs=financial-common,coal
+npm run metric-pack:apply -- --company=yankuang-energy --packs=financial-common,coal --apply
 ```
 
 The final command argument overrides `CONTE_EQUITY_ARCHIVE` when needed:
@@ -104,6 +118,18 @@ npm run promote:legacy-unverified -- --apply
 
 Each workspace contains `company.json`, `company.sqlite`, retained files under `documents/`, and disposable output under `exports/`. The fallback `./companies` directory is intentionally ignored by Git because it contains local research data.
 
+Audit retained files and database record counts without modifying the workspace:
+
+```sh
+npm run archive:audit -- --company=yankuang-energy
+```
+
+Export a complete company workspace to a new directory. Existing destination folders are never overwritten:
+
+```sh
+npm run archive:export -- --company=yankuang-energy --destination=/path/to/backup-root
+```
+
 Import point-in-time estimates from a CSV. Required columns are `metric_id,target_period_type,target_period_end,as_of,provider,estimate_type,value,evidence_id`; optional columns include `target_period_start,analyst,unit,published_at,observed_at,dimensions,ingestion_method,verification_status`.
 
 ```sh
@@ -112,3 +138,36 @@ npm run import:estimates -- --file=/path/to/estimates.csv --apply
 ```
 
 Use semicolon-separated values for multiple Evidence IDs or dimensions, for example `evidence-a;evidence-b` and `geography=China;scenario=base`.
+
+Import actual financial or operating facts from a CSV. Required columns are `metric_id,period_type,period_end,value,evidence_id`; duration facts also require `period_start`. Optional columns include `unit,dimensions,source_reported_at,observed_at,company_industry_id,business_line_id,ingestion_method,verification_status`:
+
+```sh
+npm run import:facts -- --file=/path/to/facts.csv
+npm run import:facts -- --file=/path/to/facts.csv --company=yankuang-energy --apply
+```
+
+Import management history from CSV (`name_zh` or `name_en`, `role_title_raw`, and `start_date` are required). Optional manager columns (`manager_role_title_raw`, `manager_role_type`, `manager_unit_name`, `reporting_relationship_type`, `reporting_start_date`, `reporting_end_date`) create temporal reporting lines:
+
+```sh
+npm run import:management -- --file=/path/to/management.csv
+npm run import:management -- --file=/path/to/management.csv --company=yankuang-energy --apply
+```
+
+Import cap table snapshots from CSV (`as_of_date`, `share_class_name`, `security_type`, and `shares_outstanding` are required):
+
+```sh
+npm run import:cap-table -- --file=/path/to/cap-table.csv
+npm run import:cap-table -- --file=/path/to/cap-table.csv --company=yankuang-energy --apply
+```
+
+Both management and cap table imports support a dry-run by default. Re-running an already applied file reuses matching people, positions, and share classes; snapshots with an existing `as_of_date` are skipped and reported as `skippedSnapshots`.
+
+Start the local workbench against the staging workspace (the default `.env` in this checkout points at the configured Dropbox archive and uses `.conte-staging` as the writable target):
+
+```sh
+npm run web:dev
+```
+
+Open `http://127.0.0.1:4173/` for the default company, or `/companies/<company_id>` for another workspace. The same data services are available as JSON routes, including `/api/companies`, `/api/facts`, `/api/estimates`, `/api/metrics`, `/api/taxonomy`, `/api/people`, `/api/reporting-lines`, `/api/cap-table`, `/api/sources`, `/api/artifacts`, and the four CSV import endpoints.
+
+The model plugin publishes both the callable `equityResearchTools` service and validated `equityResearchToolDefinitions` through Cordis reflection. When the Harness `tools` service is present, it also registers the same definitions directly with `ctx.tools`, including object-shaped argument validation and model-safe JSON schemas. Tool methods operate through the Data Engine and Model Engine; they do not expose SQLite or filesystem primitives.
