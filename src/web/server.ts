@@ -7,6 +7,7 @@ import { importManagementCsvText } from '../import/management.js'
 import { importCapTableCsvText } from '../import/cap-table.js'
 import { importFactsCsvText } from '../import/facts.js'
 import { EquityModelEngine } from '../model-engine/service.js'
+import { bankPbRoeSchema, insurancePEvSchema } from '../tools/schema.js'
 
 export interface WebServerConfig { host?: string; port?: number; companyId?: string }
 
@@ -142,13 +143,18 @@ export class EquityWebServer {
 
   private async handleBankRun(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      const payload = parsePayload(await readBody(request), (form) => ({ companyId: form.get('company_id') ?? undefined, input: JSON.parse(form.get('input') ?? '{}') })) as { companyId?: string; input: Parameters<EquityModelEngine['runBankPbRoe']>[1]; notes?: string }
+      const parsed = parsePayload(await readBody(request), (form) => ({ companyId: form.get('company_id') ?? undefined, input: JSON.parse(form.get('input') ?? '{}') })) as { companyId?: unknown; input?: unknown; notes?: unknown }
+      const payload = bankPbRoeSchema.parse({ ...parsed, companyId: parsed.companyId ?? this.companyId })
       sendJson(response, this.modelEngine.runBankPbRoe(payload.companyId ?? this.companyId, payload.input, payload.notes))
     } catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 400) }
   }
 
   private async handleInsuranceRun(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    try { const payload = parsePayload(await readBody(request), (form) => ({ companyId: form.get('company_id') ?? undefined, input: JSON.parse(form.get('input') ?? '{}') })) as { companyId?: string; input: Parameters<EquityModelEngine['runInsurancePEv']>[1]; notes?: string }; sendJson(response, this.modelEngine.runInsurancePEv(payload.companyId ?? this.companyId, payload.input, payload.notes)) }
+    try {
+      const parsed = parsePayload(await readBody(request), (form) => ({ companyId: form.get('company_id') ?? undefined, input: JSON.parse(form.get('input') ?? '{}') })) as { companyId?: unknown; input?: unknown; notes?: unknown }
+      const payload = insurancePEvSchema.parse({ ...parsed, companyId: parsed.companyId ?? this.companyId })
+      sendJson(response, this.modelEngine.runInsurancePEv(payload.companyId ?? this.companyId, payload.input, payload.notes))
+    }
     catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 400) }
   }
 

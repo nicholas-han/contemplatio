@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import type { EquityArchive } from '../archive/archive-service.js'
 import { EquityDataEngine } from '../data/data-engine.js'
 
@@ -33,45 +34,47 @@ function importManagementRows(rows: ManagementCsvRow[], archive: EquityArchive, 
   for (const position of engine.listPositions(companyId)) positions.set(`${normalize(position.roleTitleRaw)}|${normalize(position.roleType)}|${position.organizationUnitId ?? ''}`, position.positionId)
   for (const line of engine.listReportingLines(companyId)) existingReportingLines.set(`${line.subordinatePositionId}|${line.managerPositionId}|${line.startDate}|${line.endDate ?? ''}|${line.relationshipType}`, line.reportingLineId)
   const assignmentIds: string[] = [], reportingLineIds: string[] = []
+  return engine.withTransaction(companyId, (database) => {
   for (const row of rows) {
     const personKeys = personAliases(row.nameZh, row.nameEn)
     let personId = personKeys.map((key) => people.get(key)).find((id): id is string => Boolean(id))
-    if (!personId) { personId = engine.createPerson(companyId, { nameZh: row.nameZh, nameEn: row.nameEn, birthYear: row.birthYear, biography: row.biography }); for (const key of personKeys) people.set(key, personId) }
-    const unitId = ensureUnit(row.unitName, row.unitType)
-    const positionId = ensurePosition(row.roleTitleRaw, row.roleType, row.positionNameNormalized, unitId)
+    if (!personId) { personId = engine.createPerson(companyId, { nameZh: row.nameZh, nameEn: row.nameEn, birthYear: row.birthYear, biography: row.biography }, database); for (const key of personKeys) people.set(key, personId) }
+    const unitId = ensureUnit(row.unitName, row.unitType, database)
+    const positionId = ensurePosition(row.roleTitleRaw, row.roleType, row.positionNameNormalized, unitId, database)
     const assignmentKey = `${personId}|${positionId}|${row.startDate}|${row.endDate ?? ''}`
     const existingAssignment = existingAssignments.get(assignmentKey)
     if (existingAssignment) assignmentIds.push(existingAssignment)
     else {
-      const assignmentId = engine.assignRole(companyId, { personId, positionId, startDate: row.startDate, endDate: row.endDate, isCurrent: row.isCurrent, sourceId: row.sourceId, evidenceId: row.evidenceId })
+      const assignmentId = engine.assignRole(companyId, { personId, positionId, startDate: row.startDate, endDate: row.endDate, isCurrent: row.isCurrent, sourceId: row.sourceId, evidenceId: row.evidenceId }, database)
       existingAssignments.set(assignmentKey, assignmentId); assignmentIds.push(assignmentId)
     }
     if (row.managerRoleTitleRaw) {
-      const managerUnitId = ensureUnit(row.managerUnitName, row.managerUnitType)
-      const managerPositionId = ensurePosition(row.managerRoleTitleRaw, row.managerRoleType, undefined, managerUnitId)
+      const managerUnitId = ensureUnit(row.managerUnitName, row.managerUnitType, database)
+      const managerPositionId = ensurePosition(row.managerRoleTitleRaw, row.managerRoleType, undefined, managerUnitId, database)
       const startDate = row.reportingStartDate ?? row.startDate; const endDate = row.reportingEndDate ?? row.endDate; const relationshipType = row.reportingRelationshipType ?? 'solid'
       const lineKey = `${positionId}|${managerPositionId}|${startDate}|${endDate ?? ''}|${relationshipType}`
       const existingLine = existingReportingLines.get(lineKey)
       if (existingLine) reportingLineIds.push(existingLine)
       else {
-        const reportingLineId = engine.addReportingLine(companyId, { subordinatePositionId: positionId, managerPositionId, relationshipType, startDate, endDate, evidenceId: row.evidenceId })
+        const reportingLineId = engine.addReportingLine(companyId, { subordinatePositionId: positionId, managerPositionId, relationshipType, startDate, endDate, evidenceId: row.evidenceId }, database)
         existingReportingLines.set(lineKey, reportingLineId); reportingLineIds.push(reportingLineId)
       }
     }
   }
   return { assignmentIds, reportingLineIds }
+  })
 
-  function ensureUnit(name: string | undefined, type: string | undefined): string | undefined {
+  function ensureUnit(name: string | undefined, type: string | undefined, database: DatabaseSync): string | undefined {
     if (!name) return undefined
     const key = normalize(name); const existing = units.get(key)
     if (existing) return existing
-    const id = engine.createOrganizationUnit(companyId, { name, unitType: type ?? 'department' }); units.set(key, id); return id
+    const id = engine.createOrganizationUnit(companyId, { name, unitType: type ?? 'department' }, database); units.set(key, id); return id
   }
 
-  function ensurePosition(title: string, type: string | undefined, normalizedTitle: string | undefined, organizationUnitId: string | undefined): string {
+  function ensurePosition(title: string, type: string | undefined, normalizedTitle: string | undefined, organizationUnitId: string | undefined, database: DatabaseSync): string {
     const key = `${normalize(title)}|${normalize(type)}|${organizationUnitId ?? ''}`; const existing = positions.get(key)
     if (existing) return existing
-    const id = engine.createPosition(companyId, { roleTitleRaw: title, roleType: type, positionNameNormalized: normalizedTitle, organizationUnitId }); positions.set(key, id); return id
+    const id = engine.createPosition(companyId, { roleTitleRaw: title, roleType: type, positionNameNormalized: normalizedTitle, organizationUnitId }, database); positions.set(key, id); return id
   }
 }
 

@@ -126,16 +126,21 @@ test('migrations reconcile duplicate natural keys before adding unique indexes',
     reportingLine.run('line-1', 'test-co', 'position-1', 'position-2', 'solid', '2025-01-01')
     reportingLine.run('line-2', 'test-co', 'position-1', 'position-2', 'solid', '2025-01-01')
     database.prepare(`INSERT INTO share_classes (share_class_id, company_id, name, security_type) VALUES (?, ?, ?, ?)`).run('class-1', 'test-co', 'A shares', 'common_equity')
+    database.prepare(`INSERT INTO share_classes (share_class_id, company_id, name, security_type) VALUES (?, ?, ?, ?)`).run('class-2', 'test-co', 'B shares', 'common_equity')
     const snapshot = database.prepare(`INSERT INTO captable_snapshots (captable_snapshot_id, company_id, as_of_date, created_at) VALUES (?, ?, ?, ?)`)
     snapshot.run('snapshot-1', 'test-co', '2025-12-31', now)
     snapshot.run('snapshot-2', 'test-co', '2025-12-31', now)
-    database.prepare(`INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding) VALUES (?, ?, ?)`).run('snapshot-2', 'class-1', 100)
+    database.prepare(`INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding) VALUES (?, ?, ?)`).run('snapshot-1', 'class-1', 100)
+    database.prepare(`INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding) VALUES (?, ?, ?)`).run('snapshot-2', 'class-2', 200)
+    database.prepare(`INSERT INTO captable_positions (captable_position_id, captable_snapshot_id, holder_name, share_class_id, shares) VALUES (?, ?, ?, ?, ?)`).run('position-2', 'snapshot-2', 'Holder Two', 'class-2', 50)
 
     assert.doesNotThrow(() => migrateDatabase(database))
     assert.equal((database.prepare('SELECT count(*) AS count FROM role_assignments').get() as { count: number }).count, 1)
     assert.equal((database.prepare('SELECT count(*) AS count FROM reporting_lines').get() as { count: number }).count, 1)
     assert.equal((database.prepare('SELECT count(*) AS count FROM captable_snapshots').get() as { count: number }).count, 1)
-    assert.equal((database.prepare('SELECT count(*) AS count FROM captable_class_totals').get() as { count: number }).count, 0)
+    assert.equal((database.prepare('SELECT count(*) AS count FROM captable_class_totals').get() as { count: number }).count, 2)
+    assert.equal((database.prepare('SELECT count(*) AS count FROM captable_positions').get() as { count: number }).count, 1)
+    assert.equal((database.prepare('SELECT captable_snapshot_id FROM captable_class_totals WHERE share_class_id = ?').get('class-1') as { captable_snapshot_id: string }).captable_snapshot_id, 'snapshot-2')
     assert.equal((database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count, 9)
   } finally {
     database.close()
@@ -313,6 +318,10 @@ test('data engine validates and queries facts through the archive boundary', asy
   const shareClassId = engine.createShareClass(manifest.company_id, { name: 'A shares', securityType: 'common_equity', exchange: 'SSE', ticker: '600188', currency: 'CNY' })
   const snapshotId = engine.createCapTableSnapshot(manifest.company_id, { asOfDate: '2025-12-31', classTotals: [{ shareClassId, sharesOutstanding: 1000, percentageOfTotalEquity: 100 }], positions: [{ holderName: 'Test holder', shareClassId, shares: 100, ownershipPct: 10, rank: 1 }] })
   assert.equal(engine.listCapTable(manifest.company_id)[0]?.snapshotId, snapshotId)
+  assert.throws(() => engine.createCapTableSnapshot(manifest.company_id, { asOfDate: '2026-01-01', classTotals: [{ shareClassId, sharesOutstanding: 1, percentageOfTotalEquity: 101 }] }), /percentageOfTotalEquity/)
+  assert.throws(() => engine.createCapTableSnapshot(manifest.company_id, { asOfDate: '2026-01-02', classTotals: [{ shareClassId, sharesOutstanding: 1 }], positions: [{ holderName: 'Invalid shares', shareClassId, shares: -1 }] }), /shares must be non-negative/)
+  assert.throws(() => engine.createCapTableSnapshot(manifest.company_id, { asOfDate: '2026-01-03', classTotals: [{ shareClassId, sharesOutstanding: 1 }], positions: [{ holderName: 'Invalid ownership', shareClassId, ownershipPct: 101 }] }), /ownershipPct/)
+  assert.throws(() => engine.createCapTableSnapshot(manifest.company_id, { asOfDate: '2026-01-04', classTotals: [{ shareClassId, sharesOutstanding: 1 }], positions: [{ holderName: 'Invalid rank', shareClassId, rank: 1.5 }] }), /rank must be a non-negative integer/)
   assert.throws(() => engine.createFact(manifest.company_id, {
     metricId: 'coal.production', periodType: 'duration', periodStart: '2025-01-01', periodEnd: '2025-12-31',
     value: 10, dimensions: { unsupported: 'x' }, evidenceIds: ['evidence-fact'],
@@ -371,6 +380,15 @@ test('web workbench keeps legacy evidence links scoped and preserves import subm
     const html = await (await fetch(`http://${address.host}:${address.port}/companies/${manifest.company_id}`)).text()
     assert.match(html, /\/api\/evidence\/evidence-legacy-web\?company_id=yankuang-energy/)
     assert.match(html, /event\.submitter/)
+    const invalidBank = await fetch(`http://${address.host}:${address.port}/api/models/bank/pb-roe`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: {} }),
+    })
+    assert.equal(invalidBank.status, 400)
+    const invalidInsurance = await fetch(`http://${address.host}:${address.port}/api/models/insurance/p-ev`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: {} }),
+    })
+    assert.equal(invalidInsurance.status, 400)
+    assert.equal(new EquityDataEngine(archive).listModelRuns(manifest.company_id).length, 0)
   } finally {
     await server.close()
   }
@@ -444,4 +462,34 @@ test('domain imports are idempotent for repeated management and cap table files'
   assert.equal(secondCapTable.snapshotIds.length, 0)
   assert.equal(secondCapTable.skippedSnapshots, 1)
   assert.equal(archive.withDatabase(manifest.company_id, (database) => (database.prepare('SELECT count(*) AS count FROM captable_snapshots').get() as { count: number }).count), 1)
+})
+
+test('management import rolls back all rows when a later assignment is invalid', async () => {
+  const { archive } = await createArchive()
+  await archive.createCompany(manifest)
+  const csv = [
+    'name_en,role_title_raw,start_date,evidence_id',
+    'First Executive,Chief Executive Officer,2025-01-01,',
+    'Second Executive,Chief Financial Officer,2025-01-01,missing-evidence',
+  ].join('\n')
+  assert.throws(() => importManagementCsvText(csv, archive, manifest.company_id, true), /FOREIGN KEY constraint failed/)
+  const engine = new EquityDataEngine(archive)
+  assert.equal(engine.listPeople(manifest.company_id).length, 0)
+  assert.equal(engine.listPositions(manifest.company_id).length, 0)
+  assert.equal(engine.listOrganizationUnits(manifest.company_id).length, 0)
+  assert.equal(engine.listPeople(manifest.company_id).flatMap((person) => person.assignments).length, 0)
+})
+
+test('cap table import rolls back all rows when a later snapshot is invalid', async () => {
+  const { archive } = await createArchive()
+  await archive.createCompany(manifest)
+  const csv = [
+    'as_of_date,share_class_name,security_type,shares_outstanding,holder_name,shares,evidence_id',
+    '2024-12-31,A shares,common_equity,1000,Holder One,100,',
+    '2025-12-31,A shares,common_equity,1100,Holder Two,110,missing-evidence',
+  ].join('\n')
+  assert.throws(() => importCapTableCsvText(csv, archive, manifest.company_id, true), /FOREIGN KEY constraint failed/)
+  const engine = new EquityDataEngine(archive)
+  assert.equal(engine.listCapTable(manifest.company_id).length, 0)
+  assert.equal(engine.listShareClasses(manifest.company_id).length, 0)
 })

@@ -141,6 +141,24 @@ export interface BusinessLineInput {
 export class EquityDataEngine {
   constructor(readonly archive: EquityArchive) {}
 
+  withTransaction<T>(companyId: string, callback: (database: DatabaseSync) => T): T {
+    return this.archive.withDatabase(companyId, (database) => {
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const result = callback(database)
+        database.exec('COMMIT')
+        return result
+      } catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
+    })
+  }
+
+  private withScopedDatabase<T>(companyId: string, database: DatabaseSync | undefined, callback: (database: DatabaseSync) => T): T {
+    return database ? callback(database) : this.archive.withDatabase(companyId, callback)
+  }
+
   async listCompanies(): Promise<Awaited<ReturnType<EquityArchive['listCompanies']>>> {
     return this.archive.listCompanies()
   }
@@ -377,9 +395,9 @@ export class EquityDataEngine {
     })))
   }
 
-  createPerson(companyId: string, input: { nameZh?: string | undefined; nameEn?: string | undefined; birthYear?: number | undefined; biography?: string | undefined }): string {
+  createPerson(companyId: string, input: { nameZh?: string | undefined; nameEn?: string | undefined; birthYear?: number | undefined; biography?: string | undefined }, database?: DatabaseSync): string {
     if (!input.nameZh?.trim() && !input.nameEn?.trim()) throw new Error('person requires nameZh or nameEn')
-    return this.archive.withDatabase(companyId, (database) => {
+    return this.withScopedDatabase(companyId, database, (database) => {
       assertCompany(database, companyId)
       const id = `person-${randomUUID()}`; const now = new Date().toISOString()
       database.prepare('INSERT INTO people (person_id, name_zh, name_en, birth_year, biography, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, input.nameZh ?? null, input.nameEn ?? null, input.birthYear ?? null, input.biography ?? null, now, now)
@@ -387,9 +405,9 @@ export class EquityDataEngine {
     })
   }
 
-  createPosition(companyId: string, input: { roleTitleRaw: string; roleType?: string | undefined; positionNameNormalized?: string | undefined; organizationUnitId?: string | undefined }): string {
+  createPosition(companyId: string, input: { roleTitleRaw: string; roleType?: string | undefined; positionNameNormalized?: string | undefined; organizationUnitId?: string | undefined }, database?: DatabaseSync): string {
     if (!input.roleTitleRaw.trim()) throw new Error('position requires roleTitleRaw')
-    return this.archive.withDatabase(companyId, (database) => {
+    return this.withScopedDatabase(companyId, database, (database) => {
       assertCompany(database, companyId)
       if (input.organizationUnitId && !database.prepare('SELECT organization_unit_id FROM organization_units WHERE organization_unit_id = ? AND company_id = ?').get(input.organizationUnitId, companyId)) throw new Error('Unknown organization unit')
       const id = `position-${randomUUID()}`
@@ -398,9 +416,9 @@ export class EquityDataEngine {
     })
   }
 
-  createOrganizationUnit(companyId: string, input: { name: string; unitType: string; parentUnitId?: string | undefined }): string {
+  createOrganizationUnit(companyId: string, input: { name: string; unitType: string; parentUnitId?: string | undefined }, database?: DatabaseSync): string {
     if (!input.name.trim() || !input.unitType.trim()) throw new Error('organization unit requires name and unitType')
-    return this.archive.withDatabase(companyId, (database) => {
+    return this.withScopedDatabase(companyId, database, (database) => {
       assertCompany(database, companyId)
       if (input.parentUnitId && !database.prepare('SELECT organization_unit_id FROM organization_units WHERE organization_unit_id = ? AND company_id = ?').get(input.parentUnitId, companyId)) throw new Error('Unknown parent organization unit')
       const id = `org-unit-${randomUUID()}`
@@ -409,10 +427,10 @@ export class EquityDataEngine {
     })
   }
 
-  assignRole(companyId: string, input: { personId: string; positionId: string; startDate: string; endDate?: string | undefined; isCurrent?: boolean | undefined; sourceId?: string | undefined; evidenceId?: string | undefined }): string {
+  assignRole(companyId: string, input: { personId: string; positionId: string; startDate: string; endDate?: string | undefined; isCurrent?: boolean | undefined; sourceId?: string | undefined; evidenceId?: string | undefined }, database?: DatabaseSync): string {
     validateDate(input.startDate, 'startDate'); if (input.endDate) validateDate(input.endDate, 'endDate')
     if (input.endDate && input.startDate > input.endDate) throw new Error('startDate must not be after endDate')
-    return this.archive.withDatabase(companyId, (database) => {
+    return this.withScopedDatabase(companyId, database, (database) => {
       assertCompany(database, companyId)
       if (!database.prepare('SELECT person_id FROM people WHERE person_id = ?').get(input.personId)) throw new Error('Unknown person')
       if (!database.prepare('SELECT position_id FROM positions WHERE position_id = ? AND company_id = ?').get(input.positionId, companyId)) throw new Error('Unknown position')
@@ -422,10 +440,10 @@ export class EquityDataEngine {
     })
   }
 
-  addReportingLine(companyId: string, input: { subordinatePositionId: string; managerPositionId: string; relationshipType: 'solid' | 'dotted'; startDate: string; endDate?: string | undefined; evidenceId?: string | undefined }): string {
+  addReportingLine(companyId: string, input: { subordinatePositionId: string; managerPositionId: string; relationshipType: 'solid' | 'dotted'; startDate: string; endDate?: string | undefined; evidenceId?: string | undefined }, database?: DatabaseSync): string {
     validateDate(input.startDate, 'startDate'); if (input.endDate) validateDate(input.endDate, 'endDate')
     if (input.subordinatePositionId === input.managerPositionId) throw new Error('A position cannot report to itself')
-    return this.archive.withDatabase(companyId, (database) => {
+    return this.withScopedDatabase(companyId, database, (database) => {
       assertCompany(database, companyId)
       for (const positionId of [input.subordinatePositionId, input.managerPositionId]) if (!database.prepare('SELECT position_id FROM positions WHERE position_id = ? AND company_id = ?').get(positionId, companyId)) throw new Error(`Unknown position: ${positionId}`)
       const id = `reporting-line-${randomUUID()}`
@@ -434,9 +452,9 @@ export class EquityDataEngine {
     })
   }
 
-  createShareClass(companyId: string, input: { name: string; securityType: string; exchange?: string | undefined; ticker?: string | undefined; currency?: string | undefined }): string {
+  createShareClass(companyId: string, input: { name: string; securityType: string; exchange?: string | undefined; ticker?: string | undefined; currency?: string | undefined }, database?: DatabaseSync): string {
     if (!input.name.trim() || !input.securityType.trim()) throw new Error('share class requires name and securityType')
-    return this.archive.withDatabase(companyId, (database) => {
+    return this.withScopedDatabase(companyId, database, (database) => {
       assertCompany(database, companyId)
       const id = `share-class-${randomUUID()}`
       database.prepare('INSERT INTO share_classes (share_class_id, company_id, name, security_type, exchange, ticker, currency) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, companyId, input.name, input.securityType, input.exchange ?? null, input.ticker ?? null, input.currency ?? null)
@@ -444,17 +462,31 @@ export class EquityDataEngine {
     })
   }
 
-  createCapTableSnapshot(companyId: string, input: { asOfDate: string; sourceId?: string | undefined; evidenceId?: string | undefined; classTotals: Array<{ shareClassId: string; sharesOutstanding: number; percentageOfTotalEquity?: number | undefined }>; positions?: Array<{ holderName: string; holderId?: string | undefined; shareClassId: string; shares?: number | undefined; ownershipPct?: number | undefined; rank?: number | undefined }> }): string {
+  createCapTableSnapshot(companyId: string, input: { asOfDate: string; sourceId?: string | undefined; evidenceId?: string | undefined; classTotals: Array<{ shareClassId: string; sharesOutstanding: number; percentageOfTotalEquity?: number | undefined }>; positions?: Array<{ holderName: string; holderId?: string | undefined; shareClassId: string; shares?: number | undefined; ownershipPct?: number | undefined; rank?: number | undefined }> }, transactionDatabase?: DatabaseSync): string {
     validateDate(input.asOfDate, 'asOfDate')
     if (!input.classTotals.length) throw new Error('cap table snapshot requires class totals')
-    return this.archive.withDatabase(companyId, (database) => {
+    return this.withScopedDatabase(companyId, transactionDatabase, (database) => {
       assertCompany(database, companyId)
       for (const total of input.classTotals) {
         if (!Number.isFinite(total.sharesOutstanding) || total.sharesOutstanding < 0) throw new Error('sharesOutstanding must be non-negative')
+        if (total.percentageOfTotalEquity !== undefined && (!Number.isFinite(total.percentageOfTotalEquity) || total.percentageOfTotalEquity < 0 || total.percentageOfTotalEquity > 100)) throw new Error('percentageOfTotalEquity must be between 0 and 100')
         if (!database.prepare('SELECT share_class_id FROM share_classes WHERE share_class_id = ? AND company_id = ? AND active = 1').get(total.shareClassId, companyId)) throw new Error(`Unknown share class: ${total.shareClassId}`)
       }
-      for (const position of input.positions ?? []) if (!database.prepare('SELECT share_class_id FROM share_classes WHERE share_class_id = ? AND company_id = ? AND active = 1').get(position.shareClassId, companyId)) throw new Error(`Unknown share class: ${position.shareClassId}`)
+      for (const position of input.positions ?? []) {
+        if (position.shares !== undefined && (!Number.isFinite(position.shares) || position.shares < 0)) throw new Error('shares must be non-negative')
+        if (position.ownershipPct !== undefined && (!Number.isFinite(position.ownershipPct) || position.ownershipPct < 0 || position.ownershipPct > 100)) throw new Error('ownershipPct must be between 0 and 100')
+        if (position.rank !== undefined && (!Number.isFinite(position.rank) || !Number.isInteger(position.rank) || position.rank < 0)) throw new Error('rank must be a non-negative integer')
+        if (!database.prepare('SELECT share_class_id FROM share_classes WHERE share_class_id = ? AND company_id = ? AND active = 1').get(position.shareClassId, companyId)) throw new Error(`Unknown share class: ${position.shareClassId}`)
+      }
       const snapshotId = `captable-snapshot-${randomUUID()}`; const now = new Date().toISOString()
+      if (transactionDatabase !== undefined) {
+        database.prepare('INSERT INTO captable_snapshots (captable_snapshot_id, company_id, as_of_date, source_id, evidence_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(snapshotId, companyId, input.asOfDate, input.sourceId ?? null, input.evidenceId ?? null, now)
+        const total = database.prepare('INSERT INTO captable_class_totals (captable_snapshot_id, share_class_id, shares_outstanding, percentage_of_total_equity) VALUES (?, ?, ?, ?)')
+        for (const item of input.classTotals) total.run(snapshotId, item.shareClassId, item.sharesOutstanding, item.percentageOfTotalEquity ?? null)
+        const position = database.prepare('INSERT INTO captable_positions (captable_position_id, captable_snapshot_id, holder_name, holder_id, share_class_id, shares, ownership_pct, rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        for (const item of input.positions ?? []) position.run(`captable-position-${randomUUID()}`, snapshotId, item.holderName, item.holderId ?? null, item.shareClassId, item.shares ?? null, item.ownershipPct ?? null, item.rank ?? null)
+        return snapshotId
+      }
       database.exec('BEGIN IMMEDIATE')
       try {
         database.prepare('INSERT INTO captable_snapshots (captable_snapshot_id, company_id, as_of_date, source_id, evidence_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(snapshotId, companyId, input.asOfDate, input.sourceId ?? null, input.evidenceId ?? null, now)

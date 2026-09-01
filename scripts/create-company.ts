@@ -21,6 +21,7 @@ if (!process.argv.includes('--apply')) {
   console.log(JSON.stringify({ mode: 'dry-run', root, manifest }, null, 2))
 } else {
   const archive = new EquityArchive({ root })
+  await archive.initialize()
   const company = await archive.createCompany(manifest)
   console.log(JSON.stringify({ mode: 'apply', root, companyId: manifest.company_id, path: company.path, databasePath: company.databasePath }, null, 2))
 }

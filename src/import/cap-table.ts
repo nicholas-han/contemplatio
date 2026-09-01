@@ -21,14 +21,15 @@ function importCapTableRows(rows: CapTableCsvRow[], archive: EquityArchive, comp
   const snapshots = new Map<string, CapTableCsvRow[]>(); for (const row of rows) snapshots.set(row.asOfDate, [...(snapshots.get(row.asOfDate) ?? []), row])
   const existingDates = new Set(engine.listCapTable(companyId).map((snapshot) => snapshot.asOfDate))
   let skippedSnapshots = 0
-  const snapshotIds = [...snapshots.entries()].flatMap(([asOfDate, snapshotRows]) => {
-    if (existingDates.has(asOfDate)) { skippedSnapshots += 1; return [] }
+  const snapshotIds: string[] = []
+  engine.withTransaction(companyId, (database) => { for (const [asOfDate, snapshotRows] of snapshots.entries()) {
+    if (existingDates.has(asOfDate)) { skippedSnapshots += 1; continue }
     for (const row of snapshotRows) {
       const key = shareClassKey(row.shareClassName, row.securityType, row.exchange ?? null, row.ticker ?? null, row.currency ?? null)
-      if (!shareClasses.has(key)) shareClasses.set(key, engine.createShareClass(companyId, { name: row.shareClassName, securityType: row.securityType, exchange: row.exchange, ticker: row.ticker, currency: row.currency }))
+      if (!shareClasses.has(key)) shareClasses.set(key, engine.createShareClass(companyId, { name: row.shareClassName, securityType: row.securityType, exchange: row.exchange, ticker: row.ticker, currency: row.currency }, database))
     }
-    return [engine.createCapTableSnapshot(companyId, { asOfDate, sourceId: snapshotRows[0]?.sourceId, evidenceId: snapshotRows[0]?.evidenceId, classTotals: [...new Map(snapshotRows.map((row) => [shareClassKey(row.shareClassName, row.securityType, row.exchange ?? null, row.ticker ?? null, row.currency ?? null), row])).values()].map((row) => ({ shareClassId: shareClasses.get(shareClassKey(row.shareClassName, row.securityType, row.exchange ?? null, row.ticker ?? null, row.currency ?? null))!, sharesOutstanding: row.sharesOutstanding, percentageOfTotalEquity: row.percentageOfTotalEquity })), positions: snapshotRows.filter((row) => row.holderName).map((row) => ({ holderName: row.holderName!, holderId: row.holderId, shareClassId: shareClasses.get(shareClassKey(row.shareClassName, row.securityType, row.exchange ?? null, row.ticker ?? null, row.currency ?? null))!, shares: row.shares, ownershipPct: row.ownershipPct, rank: row.rank })) })]
-  })
+    snapshotIds.push(engine.createCapTableSnapshot(companyId, { asOfDate, sourceId: snapshotRows[0]?.sourceId, evidenceId: snapshotRows[0]?.evidenceId, classTotals: [...new Map(snapshotRows.map((row) => [shareClassKey(row.shareClassName, row.securityType, row.exchange ?? null, row.ticker ?? null, row.currency ?? null), row])).values()].map((row) => ({ shareClassId: shareClasses.get(shareClassKey(row.shareClassName, row.securityType, row.exchange ?? null, row.ticker ?? null, row.currency ?? null))!, sharesOutstanding: row.sharesOutstanding, percentageOfTotalEquity: row.percentageOfTotalEquity })), positions: snapshotRows.filter((row) => row.holderName).map((row) => ({ holderName: row.holderName!, holderId: row.holderId, shareClassId: shareClasses.get(shareClassKey(row.shareClassName, row.securityType, row.exchange ?? null, row.ticker ?? null, row.currency ?? null))!, shares: row.shares, ownershipPct: row.ownershipPct, rank: row.rank })) }, database))
+  } })
   return { snapshotIds, skippedSnapshots }
 }
 

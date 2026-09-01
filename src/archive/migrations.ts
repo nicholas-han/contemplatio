@@ -383,12 +383,59 @@ export const migrations: readonly Migration[] = [
         FROM role_assignments
         GROUP BY company_id, person_id, position_id, start_date, ifnull(end_date, '')
       );
-      DELETE FROM captable_snapshots
-      WHERE captable_snapshot_id NOT IN (
-        SELECT MIN(captable_snapshot_id)
-        FROM captable_snapshots
-        GROUP BY company_id, as_of_date
+      CREATE TEMP TABLE captable_snapshot_dedup_map AS
+      SELECT duplicate.captable_snapshot_id AS duplicate_id,
+        (
+          SELECT keeper.captable_snapshot_id
+          FROM captable_snapshots keeper
+          WHERE keeper.company_id = duplicate.company_id
+            AND keeper.as_of_date = duplicate.as_of_date
+          ORDER BY
+            (
+              (SELECT count(*) FROM captable_class_totals total
+               WHERE total.captable_snapshot_id = keeper.captable_snapshot_id)
+              +
+              (SELECT count(*) FROM captable_positions position
+               WHERE position.captable_snapshot_id = keeper.captable_snapshot_id)
+            ) DESC,
+            keeper.captable_snapshot_id
+          LIMIT 1
+        ) AS keeper_id
+      FROM captable_snapshots duplicate
+      WHERE duplicate.captable_snapshot_id <> (
+        SELECT keeper.captable_snapshot_id
+        FROM captable_snapshots keeper
+        WHERE keeper.company_id = duplicate.company_id
+          AND keeper.as_of_date = duplicate.as_of_date
+        ORDER BY
+          (
+            (SELECT count(*) FROM captable_class_totals total
+             WHERE total.captable_snapshot_id = keeper.captable_snapshot_id)
+            +
+            (SELECT count(*) FROM captable_positions position
+             WHERE position.captable_snapshot_id = keeper.captable_snapshot_id)
+          ) DESC,
+          keeper.captable_snapshot_id
+        LIMIT 1
       );
+      INSERT OR IGNORE INTO captable_class_totals (
+        captable_snapshot_id, share_class_id, shares_outstanding, percentage_of_total_equity
+      )
+      SELECT dedup.keeper_id, total.share_class_id, total.shares_outstanding, total.percentage_of_total_equity
+      FROM captable_snapshot_dedup_map dedup
+      JOIN captable_class_totals total ON total.captable_snapshot_id = dedup.duplicate_id;
+      UPDATE captable_positions
+      SET captable_snapshot_id = (
+        SELECT dedup.keeper_id
+        FROM captable_snapshot_dedup_map dedup
+        WHERE dedup.duplicate_id = captable_positions.captable_snapshot_id
+      )
+      WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map);
+      DELETE FROM captable_class_totals
+      WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map);
+      DELETE FROM captable_snapshots
+      WHERE captable_snapshot_id IN (SELECT duplicate_id FROM captable_snapshot_dedup_map);
+      DROP TABLE captable_snapshot_dedup_map;
       CREATE UNIQUE INDEX role_assignments_natural_key_idx
         ON role_assignments(company_id, person_id, position_id, start_date, ifnull(end_date, ''));
       DROP INDEX captable_snapshots_company_date_idx;
