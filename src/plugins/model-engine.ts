@@ -16,7 +16,7 @@ export function apply(ctx: Context, _config: unknown): void {
   if (!archive) throw new Error('conte-equity-model-engine requires conte-equity-archive')
   const dataEngine = ctx.reflect.get('equityDataEngine') as EquityDataEngine | undefined
   const modelEngine = dataEngine ? new EquityModelEngine(dataEngine) : new EquityModelEngine(archive)
-  const tools = dataEngine ? createEquityResearchTools(dataEngine) : createEquityResearchTools(archive)
+  const tools = dataEngine ? createEquityResearchTools(dataEngine, modelEngine) : createEquityResearchTools(archive, modelEngine)
   ctx.reflect.provide('equityModelEngine', modelEngine)
   ctx.reflect.provide('equityResearchTools', tools)
   ctx.reflect.provide('equityResearchToolDefinitions', researchToolDefinitions)

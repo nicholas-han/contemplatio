@@ -37,6 +37,8 @@ export interface FactRecord {
 
 export interface EstimateInput {
   metricId: string
+  companyIndustryId?: string
+  businessLineId?: string
   targetPeriodType: 'duration' | 'instant'
   targetPeriodStart?: string
   targetPeriodEnd: string
@@ -57,6 +59,8 @@ export interface EstimateInput {
 export interface EstimateRecord {
   estimateId: string
   metricId: string
+  companyIndustryId: string | null
+  businessLineId: string | null
   targetPeriodType: 'duration' | 'instant'
   targetPeriodStart: string | null
   targetPeriodEnd: string
@@ -107,6 +111,8 @@ export interface FactFilter {
 
 export interface EstimateFilter {
   metricId?: string
+  companyIndustryId?: string
+  businessLineId?: string
   targetPeriodEnd?: string
   asOfFrom?: string
   asOfTo?: string
@@ -270,6 +276,8 @@ export class EquityDataEngine {
       const normalized: EstimateFilter = typeof filter === 'string' ? { metricId: filter } : filter
       const clauses = ['1 = 1']; const parameters: Array<string | number> = []
       if (normalized.metricId) { clauses.push('metric_id = ?'); parameters.push(normalized.metricId) }
+      if (normalized.companyIndustryId) { clauses.push('company_industry_id = ?'); parameters.push(normalized.companyIndustryId) }
+      if (normalized.businessLineId) { clauses.push('business_line_id = ?'); parameters.push(normalized.businessLineId) }
       if (normalized.targetPeriodEnd) { validateDate(normalized.targetPeriodEnd, 'targetPeriodEnd'); clauses.push('target_period_end = ?'); parameters.push(normalized.targetPeriodEnd) }
       if (normalized.asOfFrom) { validateDate(normalized.asOfFrom, 'asOfFrom'); clauses.push('as_of >= ?'); parameters.push(normalized.asOfFrom) }
       if (normalized.asOfTo) { validateDate(normalized.asOfTo, 'asOfTo'); clauses.push('as_of <= ?'); parameters.push(normalized.asOfTo) }
@@ -306,16 +314,19 @@ export class EquityDataEngine {
       for (const evidenceId of input.evidenceIds) {
         if (!database.prepare('SELECT evidence_id FROM evidence WHERE evidence_id = ?').get(evidenceId)) throw new Error(`Unknown Evidence: ${evidenceId}`)
       }
+      if (input.companyIndustryId) assertCompanyIndustry(database, companyId, input.companyIndustryId)
+      if (input.businessLineId) assertBusinessLine(database, companyId, input.businessLineId, input.companyIndustryId)
       const estimateId = `estimate-${randomUUID()}`
       const now = new Date().toISOString()
       database.exec('BEGIN IMMEDIATE')
       try {
         database.prepare(`INSERT INTO estimates (
-          estimate_id, metric_id, target_period_type, target_period_start, target_period_end, as_of,
+          estimate_id, metric_id, company_industry_id, business_line_id, target_period_type, target_period_start, target_period_end, as_of,
           published_at, observed_at, provider, analyst, estimate_type, value_number, value_text,
           unit, dimensions_json, ingestion_method, verification_status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          estimateId, input.metricId, input.targetPeriodType, input.targetPeriodStart ?? null, input.targetPeriodEnd,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          estimateId, input.metricId, input.companyIndustryId ?? null, input.businessLineId ?? null,
+          input.targetPeriodType, input.targetPeriodStart ?? null, input.targetPeriodEnd,
           input.asOf, input.publishedAt ?? null, input.observedAt ?? null, input.provider, input.analyst ?? null,
           input.estimateType, typeof input.value === 'number' ? input.value : null, typeof input.value === 'string' ? input.value : null,
           input.unit ?? null, input.dimensions ? JSON.stringify(input.dimensions) : null, input.ingestionMethod,
@@ -342,15 +353,17 @@ export class EquityDataEngine {
         if (metric.value_type === 'number' && (typeof input.value !== 'number' || !Number.isFinite(input.value))) throw new Error('Estimate value must be a finite number')
         if (metric.value_type === 'text' && typeof input.value !== 'string') throw new Error('Estimate value must be text')
         for (const evidenceId of input.evidenceIds) if (!database.prepare('SELECT evidence_id FROM evidence WHERE evidence_id = ?').get(evidenceId)) throw new Error(`Unknown Evidence: ${evidenceId}`)
+        if (input.companyIndustryId) assertCompanyIndustry(database, companyId, input.companyIndustryId)
+        if (input.businessLineId) assertBusinessLine(database, companyId, input.businessLineId, input.companyIndustryId)
         return { input, id: `estimate-${randomUUID()}` }
       })
-      const insert = database.prepare(`INSERT INTO estimates (estimate_id, metric_id, target_period_type, target_period_start, target_period_end, as_of, published_at, observed_at, provider, analyst, estimate_type, value_number, value_text, unit, dimensions_json, ingestion_method, verification_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      const insert = database.prepare(`INSERT INTO estimates (estimate_id, metric_id, company_industry_id, business_line_id, target_period_type, target_period_start, target_period_end, as_of, published_at, observed_at, provider, analyst, estimate_type, value_number, value_text, unit, dimensions_json, ingestion_method, verification_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       const link = database.prepare('INSERT INTO estimate_evidence (estimate_id, evidence_id) VALUES (?, ?)')
       const now = new Date().toISOString()
       database.exec('BEGIN IMMEDIATE')
       try {
         for (const { input, id } of prepared) {
-          insert.run(id, input.metricId, input.targetPeriodType, input.targetPeriodStart ?? null, input.targetPeriodEnd, input.asOf, input.publishedAt ?? null, input.observedAt ?? null, input.provider, input.analyst ?? null, input.estimateType, typeof input.value === 'number' ? input.value : null, typeof input.value === 'string' ? input.value : null, input.unit ?? null, input.dimensions ? JSON.stringify(input.dimensions) : null, input.ingestionMethod, input.verificationStatus, now)
+          insert.run(id, input.metricId, input.companyIndustryId ?? null, input.businessLineId ?? null, input.targetPeriodType, input.targetPeriodStart ?? null, input.targetPeriodEnd, input.asOf, input.publishedAt ?? null, input.observedAt ?? null, input.provider, input.analyst ?? null, input.estimateType, typeof input.value === 'number' ? input.value : null, typeof input.value === 'string' ? input.value : null, input.unit ?? null, input.dimensions ? JSON.stringify(input.dimensions) : null, input.ingestionMethod, input.verificationStatus, now)
           for (const evidenceId of input.evidenceIds) link.run(id, evidenceId)
         }
         database.exec('COMMIT')
@@ -684,30 +697,35 @@ export class EquityDataEngine {
   }
 
   addIndustry(companyId: string, input: IndustryInput): string {
+    validateTaxonomyId(input.industryId, 'industryId')
+    const normalizedIndustryId = input.industryId.trim()
     return this.archive.withDatabase(companyId, (database) => {
       const company = database.prepare('SELECT company_id FROM companies WHERE company_id = ?').get(companyId)
       if (!company) throw new Error(`Unknown company: ${companyId}`)
-      const industryId = `industry-${randomUUID()}`
+      const companyIndustryId = `industry-${randomUUID()}`
       const now = new Date().toISOString()
       database.prepare(`INSERT INTO company_industries
         (company_industry_id, company_id, industry_id, is_primary, created_at)
-        VALUES (?, ?, ?, ?, ?)`).run(industryId, companyId, input.industryId, input.isPrimary ? 1 : 0, now)
-      return industryId
+        VALUES (?, ?, ?, ?, ?)`).run(companyIndustryId, companyId, normalizedIndustryId, input.isPrimary ? 1 : 0, now)
+      return companyIndustryId
     })
   }
 
   addBusinessLine(companyId: string, companyIndustryId: string, input: BusinessLineInput): string {
+    validateTaxonomyId(input.businessLineTypeId, 'businessLineTypeId')
+    if (!input.displayName.trim()) throw new Error('displayName is required')
+    const businessLineTypeId = input.businessLineTypeId.trim()
     return this.archive.withDatabase(companyId, (database) => {
       assertCompanyIndustry(database, companyId, companyIndustryId)
       const industry = database.prepare('SELECT industry_id FROM company_industries WHERE company_industry_id = ?').get(companyIndustryId) as { industry_id: string } | undefined
-      const type = database.prepare('SELECT industry_id FROM business_line_types WHERE business_line_type_id = ? AND active = 1').get(input.businessLineTypeId) as { industry_id: string } | undefined
-      if (type && type.industry_id !== industry?.industry_id) throw new Error(`Business line type ${input.businessLineTypeId} does not belong to industry ${industry?.industry_id ?? companyIndustryId}`)
+      const type = database.prepare('SELECT industry_id FROM business_line_types WHERE business_line_type_id = ? AND active = 1').get(businessLineTypeId) as { industry_id: string } | undefined
+      if (type && type.industry_id !== industry?.industry_id) throw new Error(`Business line type ${businessLineTypeId} does not belong to industry ${industry?.industry_id ?? companyIndustryId}`)
       const businessLineId = `business-line-${randomUUID()}`
       const now = new Date().toISOString()
       database.prepare(`INSERT INTO business_lines
         (business_line_id, company_industry_id, business_line_type_id, display_name, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)`).run(
-        businessLineId, companyIndustryId, input.businessLineTypeId, input.displayName, now, now,
+        businessLineId, companyIndustryId, businessLineTypeId, input.displayName.trim(), now, now,
       )
       return businessLineId
     })
@@ -818,6 +836,10 @@ function validateDate(value: string, field: string): void {
   }
 }
 
+function validateTaxonomyId(value: string, field: string): void {
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(value.trim())) throw new Error(`${field} must use lowercase letters, numbers, dots, underscores, or hyphens`)
+}
+
 function boundedLimit(value: number | undefined): number {
   if (value === undefined) return 500
   if (!Number.isInteger(value) || value < 1) throw new Error('limit must be a positive integer')
@@ -878,6 +900,8 @@ function toEstimateRecord(row: Record<string, unknown>): EstimateRecord {
   const dimensions = row.dimensions_json ? JSON.parse(String(row.dimensions_json)) as Record<string, string> : null
   return {
     estimateId: String(row.estimate_id), metricId: String(row.metric_id),
+    companyIndustryId: row.company_industry_id ? String(row.company_industry_id) : null,
+    businessLineId: row.business_line_id ? String(row.business_line_id) : null,
     targetPeriodType: row.target_period_type as EstimateRecord['targetPeriodType'],
     targetPeriodStart: row.target_period_start ? String(row.target_period_start) : null,
     targetPeriodEnd: String(row.target_period_end), asOf: String(row.as_of), provider: String(row.provider),

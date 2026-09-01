@@ -3,9 +3,9 @@ import { EquityDataEngine } from '../data/data-engine.js'
 import { EquityModelEngine } from '../model-engine/service.js'
 import type { CoalScenarioInput } from '../model-engine/coal.js'
 
-export function createEquityResearchTools(source: EquityArchive | EquityDataEngine) {
+export function createEquityResearchTools(source: EquityArchive | EquityDataEngine, sharedModelEngine?: EquityModelEngine) {
   const data = source instanceof EquityDataEngine ? source : new EquityDataEngine(source)
-  const models = new EquityModelEngine(data)
+  const models = sharedModelEngine ?? new EquityModelEngine(data)
   return {
     listCompanies: () => data.listCompanies(),
     getCompany: (companyId: string) => data.getCompany(companyId),
@@ -13,8 +13,10 @@ export function createEquityResearchTools(source: EquityArchive | EquityDataEngi
     getOperatingMetrics: (companyId: string, metricId?: string, limit?: number, dimensions?: Record<string, string>, periodStartFrom?: string, periodEndTo?: string) => data.listFacts(companyId, { ...factFilter(metricId, limit, dimensions, periodStartFrom, periodEndTo), category: 'operating' }),
     getMetrics: (companyId: string, category?: 'financial' | 'operating') => data.listMetricDefinitions(companyId, category),
     getBusinessLineTypes: (companyId: string, industryId?: string) => data.listBusinessLineTypes(companyId, industryId),
+    addIndustry: (companyId: string, input: Parameters<EquityDataEngine['addIndustry']>[1]) => data.addIndustry(companyId, input),
+    addBusinessLine: (companyId: string, companyIndustryId: string, input: Parameters<EquityDataEngine['addBusinessLine']>[2]) => data.addBusinessLine(companyId, companyIndustryId, input),
     getTaxonomy: (companyId: string) => data.listTaxonomy(companyId),
-    getEstimates: (companyId: string, metricId?: string, limit?: number, asOfFrom?: string, asOfTo?: string, targetPeriodEnd?: string) => data.listEstimates(companyId, { ...(metricId ? { metricId } : {}), ...(limit !== undefined ? { limit } : {}), ...(asOfFrom ? { asOfFrom } : {}), ...(asOfTo ? { asOfTo } : {}), ...(targetPeriodEnd ? { targetPeriodEnd } : {}) }),
+    getEstimates: (companyId: string, metricId?: string, limit?: number, asOfFrom?: string, asOfTo?: string, targetPeriodEnd?: string, companyIndustryId?: string, businessLineId?: string) => data.listEstimates(companyId, { ...(metricId ? { metricId } : {}), ...(limit !== undefined ? { limit } : {}), ...(asOfFrom ? { asOfFrom } : {}), ...(asOfTo ? { asOfTo } : {}), ...(targetPeriodEnd ? { targetPeriodEnd } : {}), ...(companyIndustryId ? { companyIndustryId } : {}), ...(businessLineId ? { businessLineId } : {}) }),
     getManagement: (companyId: string) => data.listPeople(companyId),
     getReportingLines: (companyId: string) => data.listReportingLines(companyId),
     getCapTable: (companyId: string) => data.listCapTable(companyId),

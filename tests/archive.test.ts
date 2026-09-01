@@ -303,7 +303,7 @@ test('data engine validates and queries facts through the archive boundary', asy
   assert.equal(engine.listFacts(manifest.company_id, { metricId: 'coal.production' }).length, 1)
   assert.equal(engine.listFacts(manifest.company_id, { dimensions: { geography: 'Shandong' } }).length, 1)
   const firstEstimate = engine.createEstimate(manifest.company_id, {
-    metricId: 'coal.production', targetPeriodType: 'duration', targetPeriodStart: '2026-01-01', targetPeriodEnd: '2026-12-31',
+    metricId: 'coal.production', companyIndustryId: industryId, businessLineId, targetPeriodType: 'duration', targetPeriodStart: '2026-01-01', targetPeriodEnd: '2026-12-31',
     asOf: '2026-06-30', provider: 'Test desk', estimateType: 'base', value: 12, unit: 'million_tonne',
     evidenceIds: ['evidence-fact'], ingestionMethod: 'test', verificationStatus: 'unverified',
   })
@@ -315,7 +315,10 @@ test('data engine validates and queries facts through the archive boundary', asy
   const estimates = engine.listEstimates(manifest.company_id, 'coal.production')
   assert.equal(estimates.length, 2)
   assert.equal(estimates[0]?.estimateId, firstEstimate)
+  assert.equal(estimates[0]?.companyIndustryId, industryId)
+  assert.equal(estimates[0]?.businessLineId, businessLineId)
   assert.equal(estimates[1]?.value, 13)
+  assert.equal(engine.listEstimates(manifest.company_id, { businessLineId }).length, 1)
   assert.equal(engine.listEstimates(manifest.company_id, { targetPeriodEnd: '2026-12-31', asOfFrom: '2026-07-01', asOfTo: '2026-07-31' }).length, 1)
   const personId = engine.createPerson(manifest.company_id, { nameEn: 'Test Executive' })
   const unitId = engine.createOrganizationUnit(manifest.company_id, { name: 'Group Management', unitType: 'management' })
@@ -397,6 +400,25 @@ test('web workbench keeps legacy evidence links scoped and preserves import subm
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: {} }),
     })
     assert.equal(invalidInsurance.status, 400)
+    const invalidCoal = await fetch(`http://${address.host}:${address.port}/api/models/coal/run`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: {} }),
+    })
+    assert.equal(invalidCoal.status, 400)
+    const invalidSotp = await fetch(`http://${address.host}:${address.port}/api/models/sotp`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ components: [] }),
+    })
+    assert.equal(invalidSotp.status, 400)
+    const addIndustry = await fetch(`http://${address.host}:${address.port}/api/taxonomy/industries`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ company_id: manifest.company_id, industry_id: 'coal', is_primary: true }),
+    })
+    assert.equal(addIndustry.status, 200)
+    const addedIndustry = await addIndustry.json() as { companyIndustryId: string }
+    const addBusinessLine = await fetch(`http://${address.host}:${address.port}/api/taxonomy/business-lines`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ company_id: manifest.company_id, company_industry_id: addedIndustry.companyIndustryId, business_line_type_id: 'coal.custom', display_name: 'Custom coal' }),
+    })
+    assert.equal(addBusinessLine.status, 200)
+    const taxonomy = await (await fetch(`http://${address.host}:${address.port}/api/taxonomy?company_id=${manifest.company_id}`)).json() as Array<{ industryId: string; isPrimary: boolean }>
+    assert.deepEqual(taxonomy.map((industry) => [industry.industryId, industry.isPrimary]), [['coal', true]])
     assert.equal(new EquityDataEngine(archive).listModelRuns(manifest.company_id).length, 0)
   } finally {
     await server.close()
@@ -440,6 +462,9 @@ test('management and cap table CSV parsers preserve temporal input', () => {
   assert.equal(capTable[0]?.shares, 100)
   assert.throws(() => parseManagementCsv('name_en,role_title_raw,start_date\nAlice,CFO,2024-02-30'), /ISO date/)
   assert.throws(() => parseCapTableCsv('as_of_date,share_class_name,security_type,shares_outstanding\n2025-13-31,A,common_equity,1'), /ISO date/)
+  const estimate = parseEstimatesCsv('metric_id,target_period_type,target_period_start,target_period_end,as_of,provider,estimate_type,value,evidence_id,company_industry_id,business_line_id\ncoal.production,duration,2026-01-01,2026-12-31,2026-07-01,Desk,base,1,evidence,industry-1,business-line-1')[0]
+  assert.equal(estimate?.companyIndustryId, 'industry-1')
+  assert.equal(estimate?.businessLineId, 'business-line-1')
   assert.throws(() => parseEstimatesCsv('metric_id,target_period_type,target_period_end,as_of,provider,estimate_type,value,evidence_id\ncoal.production,duration,2026-12-31,2026-07-01,Desk,base,1,evidence'), /target_period_start/)
   const facts = parseFactsCsv('metric_id,period_type,period_start,period_end,value,evidence_id\ncoal.production,duration,2025-01-01,2025-12-31,10,evidence')
   assert.equal(facts[0]?.value, 10)

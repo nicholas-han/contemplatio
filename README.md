@@ -140,7 +140,7 @@ Export a complete company workspace to a new directory. Existing destination fol
 npm run archive:export -- --company=yankuang-energy --destination=/path/to/backup-root
 ```
 
-Import point-in-time estimates from a CSV. Required columns are `metric_id,target_period_type,target_period_end,as_of,provider,estimate_type,value,evidence_id`; optional columns include `target_period_start,analyst,unit,published_at,observed_at,dimensions,ingestion_method,verification_status`.
+Import point-in-time estimates from a CSV. Required columns are `metric_id,target_period_type,target_period_end,as_of,provider,estimate_type,value,evidence_id`; optional columns include `company_industry_id,business_line_id,target_period_start,analyst,unit,published_at,observed_at,dimensions,ingestion_method,verification_status`. Taxonomy IDs are validated against the selected company workspace.
 
 ```sh
 npm run import:estimates -- --file=/path/to/estimates.csv
@@ -171,6 +171,8 @@ npm run import:cap-table -- --file=/path/to/cap-table.csv --company=yankuang-ene
 ```
 
 Both management and cap table imports support a dry-run by default. Re-running an already applied file reuses matching people, positions, and share classes; snapshots with an existing `as_of_date` are skipped and reported as `skippedSnapshots`.
+
+Configure investor-defined taxonomy through the Data Engine or the local Web UI. The Web Service exposes `POST /api/taxonomy/industries` and `POST /api/taxonomy/business-lines`; these actions never infer business lines from disclosures.
 
 Start the local workbench against the staging workspace (the default `.env` in this checkout points at the configured Dropbox archive and uses `.conte-staging` as the writable target):
 
