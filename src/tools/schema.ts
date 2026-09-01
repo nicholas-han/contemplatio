@@ -11,6 +11,7 @@ export const bankPbRoeSchema = z.object({ companyId: companyIdSchema, input: z.o
 export const insurancePEvSchema = z.object({ companyId: companyIdSchema, input: z.object({ embeddedValue: z.number().nonnegative(), targetPEv: z.number().nonnegative(), netDebt: z.number(), sharesOutstanding: z.number().positive() }), notes: z.string().optional() })
 export const sotpSchema = z.object({ companyId: companyIdSchema, components: z.array(z.object({ name: z.string().min(1), value: z.number(), weight: z.number().nonnegative().optional() })).min(1), adjustments: z.number().optional(), notes: z.string().optional() })
 export const metricQuerySchema = z.object({ companyId: companyIdSchema, category: z.enum(['financial', 'operating']).optional() })
+export const businessLineTypeQuerySchema = z.object({ companyId: companyIdSchema, industryId: z.string().min(1).optional() })
 export const saveScenarioSchema = z.object({ companyId: companyIdSchema, input: z.object({ name: z.string().min(1), modelId: z.string().min(1), modelVersion: z.string().optional(), parameters: z.record(z.string(), z.unknown()) }) })
 
 export interface ResearchToolDefinition { name: string; description: string; inputSchema: z.ZodType }
@@ -21,6 +22,7 @@ export const researchToolDefinitions: ResearchToolDefinition[] = [
   { name: 'getFinancials', description: 'Query financial facts for a company.', inputSchema: factQuerySchema },
   { name: 'getOperatingMetrics', description: 'Query operating facts for a company.', inputSchema: factQuerySchema },
   { name: 'getMetrics', description: 'List active metric definitions available in a company workspace.', inputSchema: metricQuerySchema },
+  { name: 'getBusinessLineTypes', description: 'List reusable business-line types available from applied Metric Packs.', inputSchema: businessLineTypeQuerySchema },
   { name: 'getTaxonomy', description: 'List configured industries and business lines.', inputSchema: z.object({ companyId: companyIdSchema }) },
   { name: 'getEstimates', description: 'Query point-in-time analyst estimates, including historical as-of windows.', inputSchema: estimateQuerySchema },
   { name: 'getManagement', description: 'Get management people and role assignments.', inputSchema: z.object({ companyId: companyIdSchema }) },

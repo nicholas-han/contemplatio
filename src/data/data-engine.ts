@@ -91,6 +91,7 @@ export interface SourceInput { sourceType: 'filing' | 'earnings' | 'company_rele
 export interface EvidenceInput { artifactId: string; locatorType: 'pdf' | 'markdown' | 'spreadsheet' | 'api' | 'other'; locator: Record<string, unknown>; excerptText?: string; notes?: string }
 export interface OrganizationUnitRecord { organizationUnitId: string; name: string; unitType: string; parentUnitId: string | null }
 export interface MetricDefinitionRecord { metricId: string; namespace: string; name: string; labelZh: string | null; labelEn: string | null; category: string; valueType: string; canonicalUnit: string | null; periodBehavior: string; aggregationRule: string | null; originPackId: string; originPackVersion: string; allowedDimensions: string[] }
+export interface BusinessLineTypeRecord { businessLineTypeId: string; industryId: string; labelZh: string | null; labelEn: string | null; originPackId: string; originPackVersion: string }
 export interface ScenarioRecord { scenarioId: string; name: string; modelId: string; modelVersion: string; parameters: Record<string, unknown>; updatedAt: string }
 export interface DataModelRunRecord { modelRunId: string; modelId: string; runAt: string; inputs: Record<string, unknown>; outputs: Record<string, unknown> }
 export interface ModelRunInput { modelRunId: string; modelId: string; modelVersion?: string; scenarioId?: string; inputs: Record<string, unknown>; outputs: Record<string, unknown>; notes?: string }
@@ -179,6 +180,19 @@ export class EquityDataEngine {
         periodBehavior: String(row.period_behavior), aggregationRule: row.aggregation_rule ? String(row.aggregation_rule) : null,
         originPackId: String(row.origin_pack_id), originPackVersion: String(row.origin_pack_version),
         allowedDimensions: JSON.parse(String(row.allowed_dimensions_json)) as string[],
+      }))
+    })
+  }
+
+  listBusinessLineTypes(companyId: string, industryId?: string): BusinessLineTypeRecord[] {
+    return this.archive.withDatabase(companyId, (database) => {
+      const rows = industryId
+        ? database.prepare('SELECT business_line_type_id, industry_id, label_zh, label_en, origin_pack_id, origin_pack_version FROM business_line_types WHERE active = 1 AND industry_id = ? ORDER BY business_line_type_id').all(industryId)
+        : database.prepare('SELECT business_line_type_id, industry_id, label_zh, label_en, origin_pack_id, origin_pack_version FROM business_line_types WHERE active = 1 ORDER BY business_line_type_id').all()
+      return (rows as Array<Record<string, unknown>>).map((row) => ({
+        businessLineTypeId: String(row.business_line_type_id), industryId: String(row.industry_id),
+        labelZh: row.label_zh ? String(row.label_zh) : null, labelEn: row.label_en ? String(row.label_en) : null,
+        originPackId: String(row.origin_pack_id), originPackVersion: String(row.origin_pack_version),
       }))
     })
   }
@@ -685,6 +699,9 @@ export class EquityDataEngine {
   addBusinessLine(companyId: string, companyIndustryId: string, input: BusinessLineInput): string {
     return this.archive.withDatabase(companyId, (database) => {
       assertCompanyIndustry(database, companyId, companyIndustryId)
+      const industry = database.prepare('SELECT industry_id FROM company_industries WHERE company_industry_id = ?').get(companyIndustryId) as { industry_id: string } | undefined
+      const type = database.prepare('SELECT industry_id FROM business_line_types WHERE business_line_type_id = ? AND active = 1').get(input.businessLineTypeId) as { industry_id: string } | undefined
+      if (type && type.industry_id !== industry?.industry_id) throw new Error(`Business line type ${input.businessLineTypeId} does not belong to industry ${industry?.industry_id ?? companyIndustryId}`)
       const businessLineId = `business-line-${randomUUID()}`
       const now = new Date().toISOString()
       database.prepare(`INSERT INTO business_lines
@@ -696,13 +713,20 @@ export class EquityDataEngine {
     })
   }
 
-  listTaxonomy(companyId: string): Array<{ companyIndustryId: string; industryId: string; isPrimary: boolean; businessLines: Array<{ businessLineId: string; businessLineTypeId: string; displayName: string }> }> {
+  listTaxonomy(companyId: string): Array<{ companyIndustryId: string; industryId: string; isPrimary: boolean; businessLines: Array<{ businessLineId: string; businessLineTypeId: string; displayName: string; typeLabelZh?: string; typeLabelEn?: string }> }> {
     return this.archive.withDatabase(companyId, (database) => {
       const industries = database.prepare('SELECT company_industry_id, industry_id, is_primary FROM company_industries WHERE company_id = ? AND active = 1 ORDER BY is_primary DESC, industry_id').all(companyId) as Array<Record<string, unknown>>
-      const lines = database.prepare('SELECT business_line_id, company_industry_id, business_line_type_id, display_name FROM business_lines WHERE active = 1 ORDER BY display_name, business_line_id').all() as Array<Record<string, unknown>>
+      const lines = database.prepare(`SELECT b.business_line_id, b.company_industry_id, b.business_line_type_id, b.display_name,
+          t.label_zh AS type_label_zh, t.label_en AS type_label_en
+        FROM business_lines b LEFT JOIN business_line_types t ON t.business_line_type_id = b.business_line_type_id
+        WHERE b.active = 1 ORDER BY b.display_name, b.business_line_id`).all() as Array<Record<string, unknown>>
       return industries.map((industry) => ({
         companyIndustryId: String(industry.company_industry_id), industryId: String(industry.industry_id), isPrimary: Boolean(industry.is_primary),
-        businessLines: lines.filter((line) => line.company_industry_id === industry.company_industry_id).map((line) => ({ businessLineId: String(line.business_line_id), businessLineTypeId: String(line.business_line_type_id), displayName: String(line.display_name) })),
+        businessLines: lines.filter((line) => line.company_industry_id === industry.company_industry_id).map((line) => ({
+          businessLineId: String(line.business_line_id), businessLineTypeId: String(line.business_line_type_id), displayName: String(line.display_name),
+          ...(line.type_label_zh ? { typeLabelZh: String(line.type_label_zh) } : {}),
+          ...(line.type_label_en ? { typeLabelEn: String(line.type_label_en) } : {}),
+        })),
       }))
     })
   }

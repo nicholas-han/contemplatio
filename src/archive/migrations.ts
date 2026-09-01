@@ -474,6 +474,24 @@ export const migrations: readonly Migration[] = [
         ON reporting_lines(company_id, subordinate_position_id, manager_position_id, start_date, ifnull(end_date, ''), relationship_type);
     `,
   },
+  {
+    version: 10,
+    name: 'metric_pack_business_line_types',
+    sql: `
+      CREATE TABLE business_line_types (
+        business_line_type_id TEXT PRIMARY KEY,
+        industry_id TEXT NOT NULL,
+        label_zh TEXT,
+        label_en TEXT,
+        origin_pack_id TEXT NOT NULL,
+        origin_pack_version TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX business_line_types_industry_idx ON business_line_types(industry_id, business_line_type_id);
+    `,
+  },
 ]
 
 export function migrateDatabase(database: DatabaseSync): void {

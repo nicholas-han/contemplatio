@@ -25,6 +25,11 @@ const additionalMetrics: MetricDefinition[] = [
 export const coalPack: MetricPack = {
   id: 'coal',
   version: '0.1.0',
+  business_lines: [
+    { business_line_type_id: 'coal.coal_mining_and_sales', industry_id: 'coal', label_zh: '煤炭开采与销售', label_en: 'Coal Mining & Sales' },
+    { business_line_type_id: 'coal.coal_chemicals', industry_id: 'coal', label_zh: '煤炭化工', label_en: 'Coal Chemicals' },
+    { business_line_type_id: 'coal.power_generation', industry_id: 'coal', label_zh: '发电', label_en: 'Power Generation' },
+  ],
   metrics: (['production', 'sales_volume', 'asp', 'unit_cost', 'reserve'].map((name) => ({
     metric_id: `coal.${name}`, namespace: 'coal', name, category: 'operating' as const,
     value_type: 'number' as const,

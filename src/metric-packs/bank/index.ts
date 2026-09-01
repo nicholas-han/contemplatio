@@ -6,7 +6,10 @@ const metric = (name: string, zh: string, en: string, unit: string, period: 'dur
 })
 
 export const bankPack: MetricPack = {
-  id: 'bank', version: '0.1.0', metrics: [
+  id: 'bank', version: '0.1.0', business_lines: [
+    { business_line_type_id: 'bank.retail_banking', industry_id: 'bank', label_zh: '零售银行', label_en: 'Retail Banking' },
+    { business_line_type_id: 'bank.wholesale_banking', industry_id: 'bank', label_zh: '批发银行', label_en: 'Wholesale Banking' },
+  ], metrics: [
     metric('total_assets', '总资产', 'Total assets', 'CNY'), metric('loan_balance', '贷款余额', 'Loan balance', 'CNY'),
     metric('deposit_balance', '存款余额', 'Deposit balance', 'CNY'), metric('net_interest_margin', '净息差', 'Net interest margin', 'percent'),
     metric('non_performing_loan_ratio', '不良贷款率', 'Non-performing loan ratio', 'percent'), metric('provision_coverage_ratio', '拨备覆盖率', 'Provision coverage ratio', 'percent'),

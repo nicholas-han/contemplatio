@@ -146,7 +146,7 @@ test('migrations reconcile duplicate natural keys before adding unique indexes',
     assert.equal((database.prepare('SELECT captable_snapshot_id FROM captable_class_totals WHERE share_class_id = ?').get('class-1') as { captable_snapshot_id: string }).captable_snapshot_id, 'snapshot-2')
     assert.equal((database.prepare('SELECT shares_outstanding FROM captable_class_totals WHERE captable_snapshot_id = ? AND share_class_id = ?').get('snapshot-2', 'class-1') as { shares_outstanding: number }).shares_outstanding, 150)
     assert.equal((database.prepare('SELECT share_class_id FROM captable_positions').get() as { share_class_id: string }).share_class_id, 'class-2')
-    assert.equal((database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count, 9)
+    assert.equal((database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count, 10)
   } finally {
     database.close()
   }
@@ -165,13 +165,13 @@ test('company initialization creates an inspectable workspace and applies migrat
     const tables = database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type = 'table'").get() as { count: number }
     return { migrations: migrations.count, tables: tables.count }
   })
-  assert.equal(result.migrations, 9)
+  assert.equal(result.migrations, 10)
   assert.ok(result.tables >= 8)
 
   await archive.openCompany(manifest.company_id)
   assert.equal(archive.withDatabase(manifest.company_id, (database) =>
     (database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count,
-  ), 9)
+  ), 10)
 })
 
 test('retained artifact provenance remains valid after copying a company workspace', async () => {
@@ -285,6 +285,11 @@ test('data engine validates and queries facts through the archive boundary', asy
   assert.match(packApplicationId, /^metric-pack-application-/)
   assert.equal(engine.applyMetricPack(manifest.company_id, financialCommonPack), packApplicationId)
   assert.ok(engine.listMetricDefinitions(manifest.company_id, 'financial').some((metric) => metric.metricId === 'financial.revenue'))
+  assert.equal(engine.listTaxonomy(manifest.company_id).length, 0)
+  const industryId = engine.addIndustry(manifest.company_id, { industryId: 'coal', isPrimary: true })
+  assert.equal(engine.listBusinessLineTypes(manifest.company_id, 'coal').length, 3)
+  const businessLineId = engine.addBusinessLine(manifest.company_id, industryId, { businessLineTypeId: 'coal.coal_mining_and_sales', displayName: 'Coal Mining & Sales' })
+  assert.equal(engine.listTaxonomy(manifest.company_id)[0]?.businessLines[0]?.businessLineId, businessLineId)
   const factId = engine.createFact(manifest.company_id, {
     metricId: 'coal.production', periodType: 'duration', periodStart: '2025-01-01', periodEnd: '2025-12-31',
     value: 10, unit: 'tonne', dimensions: { geography: 'Shandong' }, evidenceIds: ['evidence-fact'],
@@ -297,7 +302,6 @@ test('data engine validates and queries facts through the archive boundary', asy
   assert.throws(() => engine.listFacts(manifest.company_id, { limit: 0 }), /positive integer/)
   assert.equal(engine.listFacts(manifest.company_id, { metricId: 'coal.production' }).length, 1)
   assert.equal(engine.listFacts(manifest.company_id, { dimensions: { geography: 'Shandong' } }).length, 1)
-  assert.equal(engine.listTaxonomy(manifest.company_id).length, 0)
   const firstEstimate = engine.createEstimate(manifest.company_id, {
     metricId: 'coal.production', targetPeriodType: 'duration', targetPeriodStart: '2026-01-01', targetPeriodEnd: '2026-12-31',
     asOf: '2026-06-30', provider: 'Test desk', estimateType: 'base', value: 12, unit: 'million_tonne',

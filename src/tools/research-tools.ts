@@ -12,6 +12,7 @@ export function createEquityResearchTools(source: EquityArchive | EquityDataEngi
     getFinancials: (companyId: string, metricId?: string, limit?: number, dimensions?: Record<string, string>, periodStartFrom?: string, periodEndTo?: string) => data.listFacts(companyId, { ...factFilter(metricId, limit, dimensions, periodStartFrom, periodEndTo), category: 'financial' }),
     getOperatingMetrics: (companyId: string, metricId?: string, limit?: number, dimensions?: Record<string, string>, periodStartFrom?: string, periodEndTo?: string) => data.listFacts(companyId, { ...factFilter(metricId, limit, dimensions, periodStartFrom, periodEndTo), category: 'operating' }),
     getMetrics: (companyId: string, category?: 'financial' | 'operating') => data.listMetricDefinitions(companyId, category),
+    getBusinessLineTypes: (companyId: string, industryId?: string) => data.listBusinessLineTypes(companyId, industryId),
     getTaxonomy: (companyId: string) => data.listTaxonomy(companyId),
     getEstimates: (companyId: string, metricId?: string, limit?: number, asOfFrom?: string, asOfTo?: string, targetPeriodEnd?: string) => data.listEstimates(companyId, { ...(metricId ? { metricId } : {}), ...(limit !== undefined ? { limit } : {}), ...(asOfFrom ? { asOfFrom } : {}), ...(asOfTo ? { asOfTo } : {}), ...(targetPeriodEnd ? { targetPeriodEnd } : {}) }),
     getManagement: (companyId: string) => data.listPeople(companyId),

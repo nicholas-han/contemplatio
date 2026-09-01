@@ -71,6 +71,7 @@ function handlerFor(name: string, tools: EquityResearchTools): (args: any, exec:
     getFinancials: (args) => tools.getFinancials(args.companyId, args.metricId, args.limit, args.dimensions, args.periodStartFrom, args.periodEndTo),
     getOperatingMetrics: (args) => tools.getOperatingMetrics(args.companyId, args.metricId, args.limit, args.dimensions, args.periodStartFrom, args.periodEndTo),
     getMetrics: (args) => tools.getMetrics(args.companyId, args.category),
+    getBusinessLineTypes: (args) => tools.getBusinessLineTypes(args.companyId, args.industryId),
     getTaxonomy: (args) => tools.getTaxonomy(args.companyId),
     getEstimates: (args) => tools.getEstimates(args.companyId, args.metricId, args.limit, args.asOfFrom, args.asOfTo, args.targetPeriodEnd),
     getManagement: (args) => tools.getManagement(args.companyId),
