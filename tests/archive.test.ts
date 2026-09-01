@@ -408,6 +408,20 @@ test('web workbench keeps legacy evidence links scoped and preserves import subm
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ components: [] }),
     })
     assert.equal(invalidSotp.status, 400)
+    const review = await fetch(`http://${address.host}:${address.port}/api/observations/review`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ companyId: manifest.company_id, observationId: 'observation-legacy-web', reviewStatus: 'reviewed', note: 'Checked in workbench' }),
+    })
+    const reviewBody = await review.text()
+    assert.equal(review.status, 200, reviewBody)
+    const promotePreview = await fetch(`http://${address.host}:${address.port}/api/observations/promote`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ companyId: manifest.company_id, observationIds: ['observation-legacy-web'], apply: false }),
+    })
+    assert.equal(promotePreview.status, 200)
+    assert.equal(((await promotePreview.json()) as { plans: Array<{ allowed: boolean }> }).plans[0]?.allowed, false)
+    const unverifiedPreview = await fetch(`http://${address.host}:${address.port}/api/observations/promote-unverified`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ companyId: manifest.company_id, apply: false }),
+    })
+    assert.equal(unverifiedPreview.status, 200)
     const addIndustry = await fetch(`http://${address.host}:${address.port}/api/taxonomy/industries`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ company_id: manifest.company_id, industry_id: 'coal', is_primary: true }),
     })

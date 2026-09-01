@@ -180,6 +180,6 @@ Start the local workbench against the staging workspace (the default `.env` in t
 npm run web:dev
 ```
 
-Open `http://127.0.0.1:4173/` for the default company, or `/companies/<company_id>` for another workspace. The same data services are available as JSON routes, including `/api/companies`, `/api/facts`, `/api/estimates`, `/api/metrics`, `/api/taxonomy`, `/api/business-line-types`, `/api/people`, `/api/reporting-lines`, `/api/cap-table`, `/api/sources`, `/api/artifacts`, and the four CSV import endpoints.
+Open `http://127.0.0.1:4173/` for the default company, or `/companies/<company_id>` for another workspace. The same data services are available as JSON routes, including `/api/companies`, `/api/facts`, `/api/estimates`, `/api/metrics`, `/api/taxonomy`, `/api/business-line-types`, `/api/people`, `/api/reporting-lines`, `/api/cap-table`, `/api/sources`, `/api/artifacts`, and the four CSV import endpoints. Legacy observation workflows are available through `POST /api/observations/review`, `POST /api/observations/promote` (dry-run unless `apply=true`), and `POST /api/observations/promote-unverified`.
 
 The model plugin publishes both the callable `equityResearchTools` service and validated `equityResearchToolDefinitions` through Cordis reflection. When the Harness `tools` service is present, it also registers the same definitions directly with `ctx.tools`, including object-shaped argument validation and model-safe JSON schemas. Tool methods operate through the Data Engine and Model Engine; they do not expose SQLite or filesystem primitives.
