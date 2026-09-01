@@ -50,11 +50,19 @@ The final command argument overrides `CONTE_EQUITY_ARCHIVE` when needed:
 npm run seed:yankuang -- /path/to/companies
 ```
 
-Inventory the legacy archive without writing anything:
+Inventory the legacy archive without writing anything. The historical Yankuang layout remains the default for backward compatibility:
 
 ```sh
 npm run import:legacy
 ```
+
+For another company, point the importer at one company directory and provide its stable ID and metric packs:
+
+```sh
+npm run import:legacy -- --company-dir="China Merchants Bank" --company=china-merchants-bank --name-en="China Merchants Bank" --industry=bank --packs=financial-common,bank
+```
+
+`--company-dir` may be relative to `CONTE_EQUITY_ARCHIVE` or an absolute path. `--observation-file` can override the detected `observations.csv`; otherwise `_research/imports/observations.csv` is preferred and any nested `observations.csv` is used as a fallback. The company ID defaults to a slug of the selected directory name when omitted.
 
 Create a new staging workspace only after reviewing the dry-run output:
 
@@ -67,7 +75,7 @@ The importer refuses to overwrite an existing target. It defaults to `.conte-sta
 After staging files, register the legacy CSV as reviewable observations and Evidence:
 
 ```sh
-npm run stage:legacy-observations
+npm run stage:legacy-observations -- --company=china-merchants-bank --company-dir="China Merchants Bank"
 ```
 
 This adds `legacy_observations` rows and local-artifact Evidence only. It does not promote any row into `facts`.
@@ -81,13 +89,13 @@ npm run promote:legacy
 Promotion is explicit and requires a reviewed observation ID whose status is `confirmed` or `verified`:
 
 ```sh
-npm run promote:legacy -- --observation=obs-0001 --apply
+npm run promote:legacy -- --company=china-merchants-bank --observation=obs-0001 --apply
 ```
 
 Update a staging observation after manual review (dry-run by default):
 
 ```sh
-npm run review:legacy -- --observation=obs-0011 \
+npm run review:legacy -- --company=china-merchants-bank --observation=obs-0011 \
   --metric=coal.production --status=confirmed \
   --note='Verified against the 2023 annual report' --apply
 ```
@@ -97,7 +105,7 @@ Review updates only affect the staging SQLite. The original CSV and source archi
 To skip manual review and import only structurally representable mapped rows as explicitly unverified facts:
 
 ```sh
-npm run promote:legacy-unverified -- --apply
+npm run promote:legacy-unverified -- --company=china-merchants-bank --apply
 ```
 
 These facts use `verification_status=legacy_unverified`; guidance, target, range-valued, and unmapped observations remain in staging.
@@ -105,15 +113,15 @@ These facts use `verification_status=legacy_unverified`; guidance, target, range
 Refresh the explicit legacy metric mapping after Metric Packs are expanded:
 
 ```sh
-npm run refresh:legacy-mappings
-npm run promote:legacy-unverified -- --apply
+npm run refresh:legacy-mappings -- --company=china-merchants-bank
+npm run promote:legacy-unverified -- --company=china-merchants-bank --apply
 ```
 
 For legacy instant observations whose date is stored in `as_of_date`, normalize it to the required fact `period_end` first:
 
 ```sh
-npm run normalize:legacy-periods
-npm run promote:legacy-unverified -- --apply
+npm run normalize:legacy-periods -- --company=china-merchants-bank
+npm run promote:legacy-unverified -- --company=china-merchants-bank --apply
 ```
 
 Each workspace contains `company.json`, `company.sqlite`, retained files under `documents/`, and disposable output under `exports/`. The fallback `./companies` directory is intentionally ignored by Git because it contains local research data.

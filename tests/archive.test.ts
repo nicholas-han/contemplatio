@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -21,6 +21,7 @@ import { importManagementCsvText, parseManagementCsv } from '../src/import/manag
 import { importCapTableCsvText, parseCapTableCsv } from '../src/import/cap-table.js'
 import { parseEstimatesCsv } from '../src/import/estimates.js'
 import { importFactsCsvText, parseFactsCsv } from '../src/import/facts.js'
+import { applyLegacyImport, legacyManifest, scanLegacyArchive, stageLegacyObservations } from '../src/import/legacy.js'
 import { researchToolDefinitions } from '../src/tools/schema.js'
 import { EquityWebServer } from '../src/web/server.js'
 
@@ -496,4 +497,34 @@ test('cap table import rolls back all rows when a later snapshot is invalid', as
   const engine = new EquityDataEngine(archive)
   assert.equal(engine.listCapTable(manifest.company_id).length, 0)
   assert.equal(engine.listShareClasses(manifest.company_id).length, 0)
+})
+
+test('legacy import supports a configured company directory and binds observations to its retained artifact', async () => {
+  const sourceRoot = await mkdtemp(join(tmpdir(), 'conte-legacy-source-'))
+  const companyDirectory = join(sourceRoot, 'Acme Research Archive')
+  const observationDirectory = join(companyDirectory, '_research', 'imports')
+  await mkdir(observationDirectory, { recursive: true })
+  await writeFile(join(companyDirectory, 'annual-report.pdf'), 'retained report')
+  await writeFile(join(observationDirectory, 'observations.csv'), [
+    'observation_id,entity_id,metric_id,period_kind,value_nature,review_status,period_start,period_end,value,unit,source_locator,notes',
+    'obs-acme-1,acme-co,revenue,duration,reported,unreviewed,2024-01-01,2024-12-31,123,CNY,"page 1, table 2","note, with comma"',
+  ].join('\n'))
+
+  const inventory = await scanLegacyArchive(sourceRoot, { companyDirectory: 'Acme Research Archive', companyId: 'acme-co' })
+  assert.equal(inventory.companyId, 'acme-co')
+  assert.equal(inventory.observationRelativePath, '_research/imports/observations.csv')
+  assert.equal(inventory.observationRows, 1)
+  assert.equal(inventory.observationStatuses.unreviewed, 1)
+
+  const targetRoot = await mkdtemp(join(tmpdir(), 'conte-legacy-target-'))
+  const archive = new EquityArchive({ root: targetRoot })
+  const workspace = await applyLegacyImport(inventory, archive, targetRoot, {
+    manifest: legacyManifest({ companyId: 'acme-co', nameEn: 'Acme Research Archive', primaryIndustry: 'industrial' }),
+    metricPacks: [financialCommonPack],
+  })
+  assert.equal(workspace.companyPath, join(targetRoot, 'acme-co'))
+  const staged = await stageLegacyObservations(inventory, archive)
+  assert.deepEqual(staged, { observationRows: 1, evidenceRows: 1, mappedRows: 1 })
+  assert.equal(archive.withDatabase('acme-co', (database) => (database.prepare('SELECT count(*) AS count FROM legacy_observations').get() as { count: number }).count), 1)
+  assert.equal(archive.withDatabase('acme-co', (database) => (database.prepare('SELECT count(*) AS count FROM evidence').get() as { count: number }).count), 1)
 })

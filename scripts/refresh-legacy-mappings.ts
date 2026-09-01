@@ -8,8 +8,9 @@ import { legacyMetricMap } from '../src/import/legacy.js'
 const sourceRoot = resolve(process.env.CONTE_EQUITY_ARCHIVE ?? './companies')
 const targetArgument = process.argv.find((arg) => arg.startsWith('--target='))?.slice('--target='.length)
 const targetRoot = resolve(targetArgument || resolve(sourceRoot, '.conte-staging'))
+const companyId = process.argv.find((arg) => arg.startsWith('--company='))?.slice('--company='.length) ?? 'yankuang-energy'
 const archive = new EquityArchive({ root: targetRoot })
-const updated = archive.withDatabase('yankuang-energy', (database) => {
+const updated = archive.withDatabase(companyId, (database) => {
   applyMetricPack(database, financialCommonPack)
   applyMetricPack(database, coalPack)
   const update = database.prepare(`UPDATE legacy_observations SET mapped_metric_id = ?
@@ -27,5 +28,4 @@ const updated = archive.withDatabase('yankuang-energy', (database) => {
   }
   return count
 })
-console.log(JSON.stringify({ targetRoot, updated }, null, 2))
-
+console.log(JSON.stringify({ targetRoot, companyId, updated }, null, 2))

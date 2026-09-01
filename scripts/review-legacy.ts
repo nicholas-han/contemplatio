@@ -5,6 +5,7 @@ import { getLegacyObservation, reviewLegacyObservation, reviewStatuses, type Rev
 const sourceRoot = resolve(process.env.CONTE_EQUITY_ARCHIVE ?? './companies')
 const targetArgument = process.argv.find((arg) => arg.startsWith('--target='))?.slice('--target='.length)
 const targetRoot = resolve(targetArgument || resolve(sourceRoot, '.conte-staging'))
+const companyId = process.argv.find((arg) => arg.startsWith('--company='))?.slice('--company='.length) ?? 'yankuang-energy'
 const observationId = process.argv.find((arg) => arg.startsWith('--observation='))?.slice('--observation='.length)
 const metricArgument = process.argv.find((arg) => arg.startsWith('--metric='))?.slice('--metric='.length)
 const statusArgument = process.argv.find((arg) => arg.startsWith('--status='))?.slice('--status='.length)
@@ -16,9 +17,9 @@ if (!statusArgument || !reviewStatuses.includes(statusArgument as ReviewStatus))
   throw new Error(`--status must be one of: ${reviewStatuses.join(', ')}`)
 }
 const archive = new EquityArchive({ root: targetRoot })
-const before = getLegacyObservation(archive, observationId)
+const before = getLegacyObservation(archive, observationId, companyId)
 console.log(JSON.stringify({ mode: apply ? 'apply' : 'dry-run', targetRoot, before, update: {
-  observationId, mappedMetricId: metricArgument ?? null, reviewStatus: statusArgument, note: note ?? null,
+  companyId, observationId, mappedMetricId: metricArgument ?? null, reviewStatus: statusArgument, note: note ?? null,
 } }, null, 2))
 
 if (!apply) {
@@ -32,5 +33,5 @@ const reviewUpdate = {
   ...(metricArgument !== undefined ? { mappedMetricId: metricArgument } : {}),
   ...(note ? { note } : {}),
 }
-reviewLegacyObservation(archive, reviewUpdate)
+reviewLegacyObservation(archive, reviewUpdate, companyId)
 console.log('\nReview update applied.')

@@ -13,8 +13,8 @@ export interface ReviewUpdate {
   note?: string
 }
 
-export function reviewLegacyObservation(archive: EquityArchive, update: ReviewUpdate): void {
-  archive.withDatabase('yankuang-energy', (database) => {
+export function reviewLegacyObservation(archive: EquityArchive, update: ReviewUpdate, companyId = 'yankuang-energy'): void {
+  archive.withDatabase(companyId, (database) => {
     const observation = database.prepare(
       'SELECT observation_id FROM legacy_observations WHERE observation_id = ?',
     ).get(update.observationId)
@@ -39,8 +39,8 @@ export function reviewLegacyObservation(archive: EquityArchive, update: ReviewUp
   })
 }
 
-export function getLegacyObservation(archive: EquityArchive, observationId: string): Record<string, unknown> {
-  return archive.withDatabase('yankuang-energy', (database) => {
+export function getLegacyObservation(archive: EquityArchive, observationId: string, companyId = 'yankuang-energy'): Record<string, unknown> {
+  return archive.withDatabase(companyId, (database) => {
     const row = database.prepare(
       'SELECT * FROM legacy_observations WHERE observation_id = ?',
     ).get(observationId) as Record<string, unknown> | undefined

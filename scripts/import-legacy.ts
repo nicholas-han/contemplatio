@@ -1,16 +1,33 @@
 import { access } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { EquityArchive } from '../src/archive/archive-service.js'
-import { applyLegacyImport, scanLegacyArchive } from '../src/import/legacy.js'
+import { applyLegacyImport, legacyManifest, scanLegacyArchive } from '../src/import/legacy.js'
+import { bankPack } from '../src/metric-packs/bank/index.js'
+import { coalPack } from '../src/metric-packs/coal/index.js'
+import { financialCommonPack } from '../src/metric-packs/financial-common/index.js'
+import { insurancePack } from '../src/metric-packs/insurance/index.js'
+import type { MetricPack } from '../src/metric-packs/types.js'
 
 const sourceRoot = resolve(process.env.CONTE_EQUITY_ARCHIVE ?? './companies')
 const apply = process.argv.includes('--apply')
 const targetArgument = process.argv.find((arg) => arg.startsWith('--target='))?.slice('--target='.length)
 const targetRoot = resolve(targetArgument || join(sourceRoot, '.conte-staging'))
+const companyDirectory = process.argv.find((arg) => arg.startsWith('--company-dir='))?.slice('--company-dir='.length)
+const companyId = process.argv.find((arg) => arg.startsWith('--company='))?.slice('--company='.length)
+const observationPath = process.argv.find((arg) => arg.startsWith('--observation-file='))?.slice('--observation-file='.length)
+const argument = (name: string): string | undefined => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
+const availablePacks: Record<string, MetricPack> = { 'financial-common': financialCommonPack, coal: coalPack, bank: bankPack, insurance: insurancePack }
+const selectedPackNames = (argument('packs') ?? (companyId === 'yankuang-energy' ? 'financial-common,coal' : 'financial-common')).split(',').map((name) => name.trim()).filter(Boolean)
+for (const name of selectedPackNames) if (!availablePacks[name]) throw new Error(`Unknown metric pack: ${name}`)
 
-const inventory = await scanLegacyArchive(sourceRoot)
+const inventory = await scanLegacyArchive(sourceRoot, {
+  ...(companyDirectory ? { companyDirectory } : {}),
+  ...(companyId ? { companyId } : {}),
+  ...(observationPath ? { observationPath } : {}),
+})
 console.log(JSON.stringify({
   mode: apply ? 'apply' : 'dry-run', sourceRoot, companyDirectory: inventory.companyDirectory,
+  companyId: inventory.companyId, observationPath: inventory.observationPath, packs: selectedPackNames,
   files: inventory.files.length, extensionCounts: inventory.extensionCounts,
   observationRows: inventory.observationRows, observationStatuses: inventory.observationStatuses,
 }, null, 2))
@@ -28,6 +45,15 @@ try {
 }
 
 const archive = new EquityArchive({ root: targetRoot })
-const result = await applyLegacyImport(inventory, archive, targetRoot)
+const manifest = legacyManifest({
+  companyId: inventory.companyId,
+  ...(argument('name-zh') ? { nameZh: argument('name-zh')! } : {}),
+  nameEn: argument('name-en') ?? basename(inventory.companyDirectory),
+  ...(argument('website') ? { website: argument('website')! } : {}),
+  ...(argument('jurisdiction') ? { jurisdiction: argument('jurisdiction')! } : {}),
+  ...(argument('accounting-standard') ? { accountingStandard: argument('accounting-standard') as 'CAS' | 'IFRS' | 'US-GAAP' } : {}),
+  ...(argument('industry') ? { primaryIndustry: argument('industry')! } : {}),
+})
+const result = await applyLegacyImport(inventory, archive, targetRoot, { manifest, metricPacks: selectedPackNames.map((name) => availablePacks[name]!) })
 console.log(`\nStaging workspace created: ${result.companyPath}`)
 console.log(`Copied ${result.copiedArtifacts} retained artifacts; imported ${result.observationRows} observations as unpromoted legacy material.`)
