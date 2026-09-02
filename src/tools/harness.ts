@@ -84,7 +84,7 @@ function handlerFor(name: string, tools: EquityResearchTools): (args: any, exec:
     getEvidence: (args) => tools.getEvidence(args.companyId, args.evidenceId),
     getFactEvidence: (args) => tools.getFactEvidence(args.companyId, args.factId),
     getEstimateEvidence: (args) => tools.getEstimateEvidence(args.companyId, args.estimateId),
-    runCoalScenario: (args) => tools.runCoalScenario(args.companyId, args.input, args.notes),
+    runCoalScenario: (args) => tools.runCoalScenario(args.companyId, args.input, args.notes, args.scenarioId),
     runBankPbRoe: (args) => tools.runBankPbRoe(args.companyId, args.input, args.notes),
     runInsurancePEv: (args) => tools.runInsurancePEv(args.companyId, args.input, args.notes),
     runSotp: (args) => tools.runSotp(args.companyId, args.components, args.adjustments, args.notes),

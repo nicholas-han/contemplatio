@@ -1,7 +1,7 @@
 import { access } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { EquityArchive } from '../src/archive/archive-service.js'
-import { applyLegacyImport, legacyManifest, scanLegacyArchive } from '../src/import/legacy.js'
+import { applyLegacyImport, defaultLegacyMetricPackNames, legacyManifest, scanLegacyArchive } from '../src/import/legacy.js'
 import { bankPack } from '../src/metric-packs/bank/index.js'
 import { coalPack } from '../src/metric-packs/coal/index.js'
 import { financialCommonPack } from '../src/metric-packs/financial-common/index.js'
@@ -17,14 +17,14 @@ const companyId = process.argv.find((arg) => arg.startsWith('--company='))?.slic
 const observationPath = process.argv.find((arg) => arg.startsWith('--observation-file='))?.slice('--observation-file='.length)
 const argument = (name: string): string | undefined => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const availablePacks: Record<string, MetricPack> = { 'financial-common': financialCommonPack, coal: coalPack, bank: bankPack, insurance: insurancePack }
-const selectedPackNames = (argument('packs') ?? (companyId === 'yankuang-energy' ? 'financial-common,coal' : 'financial-common')).split(',').map((name) => name.trim()).filter(Boolean)
-for (const name of selectedPackNames) if (!availablePacks[name]) throw new Error(`Unknown metric pack: ${name}`)
 
 const inventory = await scanLegacyArchive(sourceRoot, {
   ...(companyDirectory ? { companyDirectory } : {}),
   ...(companyId ? { companyId } : {}),
   ...(observationPath ? { observationPath } : {}),
 })
+const selectedPackNames = (argument('packs')?.split(',') ?? defaultLegacyMetricPackNames(inventory.companyId)).map((name) => name.trim()).filter(Boolean)
+for (const name of selectedPackNames) if (!availablePacks[name]) throw new Error(`Unknown metric pack: ${name}`)
 console.log(JSON.stringify({
   mode: apply ? 'apply' : 'dry-run', sourceRoot, companyDirectory: inventory.companyDirectory,
   companyId: inventory.companyId, observationPath: inventory.observationPath, packs: selectedPackNames,

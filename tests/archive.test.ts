@@ -21,7 +21,7 @@ import { importManagementCsvText, parseManagementCsv } from '../src/import/manag
 import { importCapTableCsvText, parseCapTableCsv } from '../src/import/cap-table.js'
 import { parseEstimatesCsv } from '../src/import/estimates.js'
 import { importFactsCsvText, parseFactsCsv } from '../src/import/facts.js'
-import { applyLegacyImport, legacyManifest, scanLegacyArchive, stageLegacyObservations } from '../src/import/legacy.js'
+import { applyLegacyImport, defaultLegacyMetricPackNames, legacyManifest, refreshLegacyMappings, scanLegacyArchive, stageLegacyObservations } from '../src/import/legacy.js'
 import { researchToolDefinitions } from '../src/tools/schema.js'
 import { EquityWebServer } from '../src/web/server.js'
 
@@ -68,7 +68,8 @@ test('model plugin registers object-shaped tools with an available Harness regis
   const root = await mkdtemp(join(tmpdir(), 'conte-harness-tools-'))
   const ctx = new Context()
   await archivePlugin.apply(ctx, { root })
-  await ctx.reflect.get('equityArchive').createCompany(manifest)
+  const archive = ctx.reflect.get('equityArchive') as EquityArchive
+  await archive.createCompany(manifest)
   const registered: Array<{ name: string; parameters: Record<string, unknown>; execute(args: unknown, exec: unknown): Promise<unknown> }> = []
   ;(ctx as Context & { tools?: unknown }).tools = {
     register(definition: typeof registered[number]) { registered.push(definition); return () => {} },
@@ -81,6 +82,19 @@ test('model plugin registers object-shaped tools with an available Harness regis
   assert.equal(company.company_id, manifest.company_id)
   assert.equal(Object.hasOwn(getCompany.parameters, '$schema'), false)
   assert.equal(JSON.stringify(getCompany.parameters).includes('pattern'), false)
+  const scenarioId = (ctx.reflect.get('equityModelEngine') as EquityModelEngine).saveScenario(manifest.company_id, {
+    name: 'Harness linked scenario', modelId: 'coal-scenario', parameters: { coalPrice: 700 },
+  })
+  const runCoalScenario = registered.find((tool) => tool.name === 'runCoalScenario')!
+  await runCoalScenario.execute({
+    companyId: manifest.company_id, scenarioId, notes: 'Harness run',
+    input: { coalPrice: 700, annualProduction: 100, years: 5, ebitdaMargin: 0.25, taxRate: 0.25, discountRate: 0.1, terminalGrowth: 0.02, netDebt: 1000, sharesOutstanding: 100 },
+  }, {})
+  const linkedRun = archive.withDatabase(manifest.company_id, (database) => database.prepare(
+    'SELECT scenario_id, notes FROM model_runs ORDER BY run_at DESC LIMIT 1',
+  ).get() as { scenario_id: string | null; notes: string | null })
+  assert.equal(linkedRun.scenario_id, scenarioId)
+  assert.equal(linkedRun.notes, 'Harness run')
 })
 
 test('model plugin remains active without optional services and disposes Harness registrations', async () => {
@@ -116,6 +130,16 @@ test('migrations reconcile duplicate natural keys before adding unique indexes',
       record.run(migration.version, migration.name, new Date().toISOString())
     }
     const now = new Date().toISOString()
+    database.prepare(`INSERT INTO template_applications (
+      application_id, template_type, metric_pack_id, metric_pack_version, company_industry_id, applied_at
+    ) VALUES (?, ?, ?, ?, ?, ?)`).run('bank-pack-before-business-lines', 'metric_pack', 'bank', '0.1.0', null, now)
+    database.prepare(`INSERT INTO metric_definitions (
+      metric_id, namespace, name, category, value_type, period_behavior, origin_pack_id,
+      origin_pack_version, allowed_dimensions_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      'coal.production', 'coal', 'production', 'operating', 'number', 'duration', 'coal',
+      '0.1.0', '[]', now, now,
+    )
     database.prepare(`INSERT INTO companies (company_id, name_en, jurisdiction, accounting_standard, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run('test-co', 'Test Co', 'CN', 'CAS', now, now)
     database.prepare(`INSERT INTO people (person_id, name_en, created_at, updated_at) VALUES (?, ?, ?, ?)`).run('person-1', 'Person One', now, now)
     database.prepare(`INSERT INTO positions (position_id, company_id, role_title_raw) VALUES (?, ?, ?)`).run('position-1', 'test-co', 'CEO')
@@ -146,6 +170,10 @@ test('migrations reconcile duplicate natural keys before adding unique indexes',
     assert.equal((database.prepare('SELECT captable_snapshot_id FROM captable_class_totals WHERE share_class_id = ?').get('class-1') as { captable_snapshot_id: string }).captable_snapshot_id, 'snapshot-2')
     assert.equal((database.prepare('SELECT shares_outstanding FROM captable_class_totals WHERE captable_snapshot_id = ? AND share_class_id = ?').get('snapshot-2', 'class-1') as { shares_outstanding: number }).shares_outstanding, 150)
     assert.equal((database.prepare('SELECT share_class_id FROM captable_positions').get() as { share_class_id: string }).share_class_id, 'class-2')
+    assert.deepEqual(
+      (database.prepare('SELECT business_line_type_id FROM business_line_types ORDER BY business_line_type_id').all() as Array<{ business_line_type_id: string }>).map((row) => row.business_line_type_id),
+      ['bank.retail_banking', 'bank.wholesale_banking', 'coal.coal_chemicals', 'coal.coal_mining_and_sales', 'coal.power_generation'],
+    )
     assert.equal((database.prepare('SELECT count(*) AS count FROM schema_migrations').get() as { count: number }).count, 10)
   } finally {
     database.close()
@@ -284,6 +312,9 @@ test('data engine validates and queries facts through the archive boundary', asy
   const packApplicationId = engine.applyMetricPack(manifest.company_id, financialCommonPack)
   assert.match(packApplicationId, /^metric-pack-application-/)
   assert.equal(engine.applyMetricPack(manifest.company_id, financialCommonPack), packApplicationId)
+  const coalPackApplicationId = engine.applyMetricPack(manifest.company_id, coalPack)
+  archive.withDatabase(manifest.company_id, (database) => database.exec('DELETE FROM business_line_types'))
+  assert.equal(engine.applyMetricPack(manifest.company_id, coalPack), coalPackApplicationId)
   assert.ok(engine.listMetricDefinitions(manifest.company_id, 'financial').some((metric) => metric.metricId === 'financial.revenue'))
   assert.equal(engine.listTaxonomy(manifest.company_id).length, 0)
   const industryId = engine.addIndustry(manifest.company_id, { industryId: 'coal', isPrimary: true })
@@ -372,6 +403,7 @@ test('web workbench keeps legacy evidence links scoped and preserves import subm
   await archive.createCompany(manifest)
   const now = new Date().toISOString()
   archive.withDatabase(manifest.company_id, (database) => {
+    applyMetricPack(database, coalPack)
     database.prepare(`INSERT INTO sources (source_id, source_type, title, publisher, created_at) VALUES (?, ?, ?, ?, ?)`).run('source-legacy-web', 'manual', 'Legacy web fixture', 'Test publisher', now)
   })
   const artifact = await archive.storeArtifact(manifest.company_id, 'Legacy observation\n', {
@@ -386,12 +418,21 @@ test('web workbench keeps legacy evidence links scoped and preserves import subm
       'observation-legacy-web', manifest.company_id, 'legacy.revenue', 'FY', '10', 'unreviewed', 'evidence-legacy-web', now,
     )
   })
-  const server = new EquityWebServer(new EquityDataEngine(archive), { companyId: manifest.company_id })
+  const dataEngine = new EquityDataEngine(archive)
+  dataEngine.createFact(manifest.company_id, {
+    metricId: 'coal.production', periodType: 'duration', periodStart: '2025-01-01', periodEnd: '2025-12-31',
+    value: 10, unit: 'tonne', dimensions: { geography: 'Shandong' }, evidenceIds: ['evidence-legacy-web'],
+    ingestionMethod: 'test', verificationStatus: 'confirmed',
+  })
+  const server = new EquityWebServer(dataEngine, { companyId: manifest.company_id })
   const address = await server.start('127.0.0.1', 0)
   try {
     const html = await (await fetch(`http://${address.host}:${address.port}/companies/${manifest.company_id}`)).text()
     assert.match(html, /\/api\/evidence\/evidence-legacy-web\?company_id=yankuang-energy/)
     assert.match(html, /event\.submitter/)
+    assert.match(html, /name="dimension_geography"/)
+    const blankDimensionFilter = await (await fetch(`http://${address.host}:${address.port}/companies/${manifest.company_id}?metric=coal.production&dimension_geography=&limit=500`)).text()
+    assert.match(blankDimensionFilter, /<h2>Facts \(1\)<\/h2>/)
     const invalidBank = await fetch(`http://${address.host}:${address.port}/api/models/bank/pb-roe`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: {} }),
     })
@@ -566,16 +607,46 @@ test('legacy import supports a configured company directory and binds observatio
   assert.equal(inventory.observationRelativePath, '_research/imports/observations.csv')
   assert.equal(inventory.observationRows, 1)
   assert.equal(inventory.observationStatuses.unreviewed, 1)
+  assert.deepEqual(defaultLegacyMetricPackNames(inventory.companyId), ['financial-common'])
+  assert.deepEqual(defaultLegacyMetricPackNames('yankuang-energy'), ['financial-common', 'coal'])
+
+  const windowsStyleInventory = {
+    ...inventory,
+    files: inventory.files.map((file) => ({ ...file, relativePath: file.relativePath.replaceAll('/', '\\') })),
+  }
 
   const targetRoot = await mkdtemp(join(tmpdir(), 'conte-legacy-target-'))
   const archive = new EquityArchive({ root: targetRoot })
-  const workspace = await applyLegacyImport(inventory, archive, targetRoot, {
+  const workspace = await applyLegacyImport(windowsStyleInventory, archive, targetRoot, {
     manifest: legacyManifest({ companyId: 'acme-co', nameEn: 'Acme Research Archive', primaryIndustry: 'industrial' }),
     metricPacks: [financialCommonPack],
   })
   assert.equal(workspace.companyPath, join(targetRoot, 'acme-co'))
-  const staged = await stageLegacyObservations(inventory, archive)
+  const staged = await stageLegacyObservations(windowsStyleInventory, archive)
   assert.deepEqual(staged, { observationRows: 1, evidenceRows: 1, mappedRows: 1 })
   assert.equal(archive.withDatabase('acme-co', (database) => (database.prepare('SELECT count(*) AS count FROM legacy_observations').get() as { count: number }).count), 1)
   assert.equal(archive.withDatabase('acme-co', (database) => (database.prepare('SELECT count(*) AS count FROM evidence').get() as { count: number }).count), 1)
+})
+
+test('legacy mapping refresh skips mappings whose metric pack is not applied', async () => {
+  const { archive } = await createArchive()
+  const company = { ...manifest, company_id: 'acme-co', name_zh: undefined, name_en: 'Acme Co', primary_industry: 'industrial', securities: [] }
+  await archive.createCompany(company)
+  const now = new Date().toISOString()
+  archive.withDatabase(company.company_id, (database) => {
+    applyMetricPack(database, financialCommonPack)
+    const insert = database.prepare(`INSERT INTO legacy_observations (
+      observation_id, entity_id, legacy_metric_id, period_kind, value_nature, review_status, imported_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    insert.run('obs-financial', company.company_id, 'revenue', 'FY', 'reported', 'unreviewed', now)
+    insert.run('obs-coal', company.company_id, 'coal_production', 'FY', 'reported', 'unreviewed', now)
+    assert.equal(refreshLegacyMappings(database), 1)
+  })
+  const mappings = archive.withDatabase(company.company_id, (database) => (database.prepare(
+    'SELECT observation_id, mapped_metric_id FROM legacy_observations ORDER BY observation_id',
+  ).all() as Array<{ observation_id: string; mapped_metric_id: string | null }>).map((row) => ({ ...row })))
+  assert.deepEqual(mappings, [
+    { observation_id: 'obs-coal', mapped_metric_id: null },
+    { observation_id: 'obs-financial', mapped_metric_id: 'financial.revenue' },
+  ])
 })

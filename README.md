@@ -115,7 +115,7 @@ These facts use `verification_status=legacy_unverified`; guidance, target, range
 Refresh the explicit legacy metric mapping after Metric Packs are expanded:
 
 ```sh
-npm run refresh:legacy-mappings -- --company=china-merchants-bank
+npm run refresh:legacy-mappings -- --company=china-merchants-bank --packs=financial-common,bank
 npm run promote:legacy-unverified -- --company=china-merchants-bank --apply
 ```
 

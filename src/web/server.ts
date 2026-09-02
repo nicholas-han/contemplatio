@@ -337,7 +337,9 @@ function parseImportPayload(body: string): { csv: string; companyId?: string; ap
 
 function factFilterFromUrl(url: URL): FactFilter {
   const category = url.searchParams.get('category')
-  const dimensions = Object.fromEntries([...url.searchParams.entries()].filter(([key]) => key.startsWith('dimension_')).map(([key, value]) => [key.slice('dimension_'.length), value]))
+  const dimensions = Object.fromEntries([...url.searchParams.entries()]
+    .filter(([key, value]) => key.startsWith('dimension_') && value.trim() !== '')
+    .map(([key, value]) => [key.slice('dimension_'.length), value]))
   return {
     ...(url.searchParams.get('metric') ? { metricId: url.searchParams.get('metric')! } : {}),
     ...(category === 'financial' || category === 'operating' ? { category } : {}),

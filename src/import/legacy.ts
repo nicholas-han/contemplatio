@@ -1,5 +1,6 @@
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import type { EquityArchive, DocumentCategory } from '../archive/archive-service.js'
 import { applyMetricPack } from '../metric-packs/apply.js'
 import { coalPack } from '../metric-packs/coal/index.js'
@@ -99,7 +100,7 @@ export async function scanLegacyArchive(sourceRoot: string, options: LegacyScanO
     companyDirectory,
     companyId,
     observationPath,
-    observationRelativePath: observationPath ? relative(companyDirectory, observationPath).replaceAll('\\', '/') : null,
+    observationRelativePath: observationPath ? normalizeRelativePath(relative(companyDirectory, observationPath)) : null,
     files,
     extensionCounts,
     observationRows,
@@ -144,6 +145,7 @@ export async function applyLegacyImport(
 
   let copiedArtifacts = 0
   for (const [index, file] of inventory.files.entries()) {
+    const relativePath = normalizeRelativePath(file.relativePath)
     const sourceId = `legacy-source-${String(index + 1).padStart(4, '0')}`
     const artifactId = `legacy-artifact-${String(index + 1).padStart(4, '0')}`
     archive.withDatabase(manifest.company_id, (database) => {
@@ -151,13 +153,13 @@ export async function applyLegacyImport(
       database.prepare(`INSERT INTO sources (
         source_id, source_type, title, publisher, accessed_at, notes, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-        sourceId, file.sourceType, basename(file.relativePath), 'Legacy archive import', now,
-        `Original relative path: ${file.relativePath}`, now,
+        sourceId, file.sourceType, basename(relativePath), 'Legacy archive import', now,
+        `Original relative path: ${relativePath}`, now,
       )
     })
     await archive.storeArtifact(manifest.company_id, { sourcePath: file.absolutePath }, {
-      artifactId, sourceId, artifactKind: 'original', mediaType: mediaTypeFor(file.relativePath),
-      category: file.category, fileName: basename(file.relativePath), originalRetained: true,
+      artifactId, sourceId, artifactKind: 'original', mediaType: mediaTypeFor(relativePath),
+      category: file.category, fileName: basename(relativePath), originalRetained: true,
     })
     copiedArtifacts += 1
   }
@@ -276,8 +278,30 @@ function slugifyCompanyId(directoryName: string): string {
   return slug || 'legacy-company'
 }
 
+export function defaultLegacyMetricPackNames(companyId: string): readonly string[] {
+  return companyId === 'yankuang-energy' ? ['financial-common', 'coal'] : ['financial-common']
+}
+
 function defaultLegacyMetricPacks(companyId: string): readonly MetricPack[] {
   return companyId === 'yankuang-energy' ? [financialCommonPack, coalPack] : [financialCommonPack]
+}
+
+export function refreshLegacyMappings(database: DatabaseSync): number {
+  const update = database.prepare(`UPDATE legacy_observations SET mapped_metric_id = ?
+    WHERE legacy_metric_id = ? AND mapped_metric_id IS NULL
+      AND EXISTS (SELECT 1 FROM metric_definitions WHERE metric_id = ? AND active = 1)`)
+  let count = 0
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    for (const [legacyMetricId, mappedMetricId] of Object.entries(legacyMetricMap)) {
+      count += Number(update.run(mappedMetricId, legacyMetricId, mappedMetricId).changes)
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+  return count
 }
 
 async function collectFiles(directory: string, base: string, files: LegacyFile[]): Promise<void> {
@@ -290,14 +314,14 @@ async function collectFiles(directory: string, base: string, files: LegacyFile[]
       continue
     }
     if (!entry.isFile()) continue
-    const relativePath = relative(base, absolutePath)
+    const relativePath = normalizeRelativePath(relative(base, absolutePath))
     const size = (await stat(absolutePath)).size
     files.push({ absolutePath, relativePath, size, ...classification(relativePath) })
   }
 }
 
 function classification(relativePath: string): Pick<LegacyFile, 'category' | 'sourceType'> {
-  const normalized = relativePath.replaceAll('\\', '/').toLowerCase()
+  const normalized = normalizeRelativePath(relativePath).toLowerCase()
   if (normalized.startsWith('_reports/')) return { category: 'analyst', sourceType: 'analyst_report' }
   if (normalized.includes('/periodic reports/') || normalized.includes('/annual shareholder meetings/')) {
     return { category: 'filings', sourceType: 'filing' }
@@ -307,6 +331,10 @@ function classification(relativePath: string): Pick<LegacyFile, 'category' | 'so
     return { category: 'curated', sourceType: 'manual' }
   }
   return { category: 'other', sourceType: 'other' }
+}
+
+function normalizeRelativePath(path: string): string {
+  return path.replaceAll('\\', '/')
 }
 
 function extnameSafe(path: string): string {

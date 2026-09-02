@@ -226,8 +226,8 @@ export class EquityDataEngine {
       try {
         const existing = database.prepare(`SELECT application_id FROM template_applications
           WHERE metric_pack_id = ? AND metric_pack_version = ? AND company_industry_id IS ?`).get(pack.id, pack.version, companyIndustryId ?? null) as { application_id: string } | undefined
-        if (existing) { database.exec('COMMIT'); return existing.application_id }
         applyMetricPackToDatabase(database, pack, { transaction: false })
+        if (existing) { database.exec('COMMIT'); return existing.application_id }
         database.prepare(`INSERT INTO template_applications (
           application_id, template_type, metric_pack_id, metric_pack_version, company_industry_id, applied_at
         ) VALUES (?, ?, ?, ?, ?, ?)`).run(
