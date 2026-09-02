@@ -474,6 +474,55 @@ export const migrations: readonly Migration[] = [
         ON reporting_lines(company_id, subordinate_position_id, manager_position_id, start_date, ifnull(end_date, ''), relationship_type);
     `,
   },
+  {
+    version: 10,
+    name: 'metric_pack_business_line_types',
+    sql: `
+      CREATE TABLE business_line_types (
+        business_line_type_id TEXT PRIMARY KEY,
+        industry_id TEXT NOT NULL,
+        label_zh TEXT,
+        label_en TEXT,
+        origin_pack_id TEXT NOT NULL,
+        origin_pack_version TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX business_line_types_industry_idx ON business_line_types(industry_id, business_line_type_id);
+
+      WITH definitions (
+        business_line_type_id, industry_id, label_zh, label_en, origin_pack_id, origin_pack_version
+      ) AS (VALUES
+        ('coal.coal_mining_and_sales', 'coal', '煤炭开采与销售', 'Coal Mining & Sales', 'coal', '0.1.0'),
+        ('coal.coal_chemicals', 'coal', '煤炭化工', 'Coal Chemicals', 'coal', '0.1.0'),
+        ('coal.power_generation', 'coal', '发电', 'Power Generation', 'coal', '0.1.0'),
+        ('bank.retail_banking', 'bank', '零售银行', 'Retail Banking', 'bank', '0.1.0'),
+        ('bank.wholesale_banking', 'bank', '批发银行', 'Wholesale Banking', 'bank', '0.1.0'),
+        ('insurance.life_and_health', 'insurance', '寿险与健康险', 'Life & Health', 'insurance', '0.1.0'),
+        ('insurance.p_and_c', 'insurance', '财产险', 'Property & Casualty', 'insurance', '0.1.0')
+      )
+      INSERT INTO business_line_types (
+        business_line_type_id, industry_id, label_zh, label_en, origin_pack_id,
+        origin_pack_version, created_at, updated_at
+      )
+      SELECT
+        definition.business_line_type_id, definition.industry_id, definition.label_zh,
+        definition.label_en, definition.origin_pack_id, definition.origin_pack_version,
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM definitions definition
+      WHERE EXISTS (
+        SELECT 1 FROM template_applications application
+        WHERE application.template_type = 'metric_pack'
+          AND application.metric_pack_id = definition.origin_pack_id
+          AND application.metric_pack_version = definition.origin_pack_version
+      ) OR EXISTS (
+        SELECT 1 FROM metric_definitions metric
+        WHERE metric.origin_pack_id = definition.origin_pack_id
+          AND metric.origin_pack_version = definition.origin_pack_version
+      );
+    `,
+  },
 ]
 
 export function migrateDatabase(database: DatabaseSync): void {

@@ -74,6 +74,7 @@ export function parseEstimatesCsv(csv: string): EstimateCsvRow[] {
     const value: number | string = rawValue !== '' && Number.isFinite(numericValue) ? numericValue : rawValue
     return {
       metricId, targetPeriodType, targetPeriodEnd, asOf, provider, estimateType, value,
+      companyIndustryId: get(row, 'company_industry_id'), businessLineId: get(row, 'business_line_id'),
       ...(targetPeriodStart ? { targetPeriodStart } : {}), analyst: get(row, 'analyst'), unit: get(row, 'unit'),
       publishedAt: get(row, 'published_at'), observedAt: get(row, 'observed_at'),
       dimensions: parseDimensions(get(row, 'dimensions')), evidenceIds: evidenceId.split(';').map((id) => id.trim()).filter(Boolean),

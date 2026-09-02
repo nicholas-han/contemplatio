@@ -1,9 +1,11 @@
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { basename, join, relative, resolve } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import type { EquityArchive, DocumentCategory } from '../archive/archive-service.js'
 import { applyMetricPack } from '../metric-packs/apply.js'
 import { coalPack } from '../metric-packs/coal/index.js'
 import { financialCommonPack } from '../metric-packs/financial-common/index.js'
+import type { MetricPack } from '../metric-packs/types.js'
 import type { CompanyManifest } from '../domain/company.js'
 
 export interface LegacyFile {
@@ -17,6 +19,9 @@ export interface LegacyFile {
 export interface LegacyInventory {
   sourceRoot: string
   companyDirectory: string
+  companyId: string
+  observationPath: string | null
+  observationRelativePath: string | null
   files: LegacyFile[]
   extensionCounts: Record<string, number>
   observationRows: number
@@ -37,9 +42,34 @@ export interface StagedObservationResult {
   mappedRows: number
 }
 
-export async function scanLegacyArchive(sourceRoot: string): Promise<LegacyInventory> {
+export interface LegacyScanOptions {
+  /** Directory relative to sourceRoot, or an absolute directory, containing one company archive. */
+  companyDirectory?: string
+  companyId?: string
+  /** Explicit observation CSV path, relative to the company directory or absolute. */
+  observationPath?: string
+}
+
+export interface LegacyManifestOptions {
+  companyId?: string
+  nameZh?: string
+  nameEn?: string
+  website?: string
+  jurisdiction?: string
+  accountingStandard?: CompanyManifest['accounting_standard']
+  primaryIndustry?: string
+  securities?: CompanyManifest['securities']
+}
+
+export interface LegacyImportOptions {
+  manifest?: CompanyManifest
+  metricPacks?: readonly MetricPack[]
+}
+
+export async function scanLegacyArchive(sourceRoot: string, options: LegacyScanOptions = {}): Promise<LegacyInventory> {
   const root = resolve(sourceRoot)
-  const companyDirectory = join(root, 'Yankuang-Energy')
+  const companyDirectory = resolveCompanyDirectory(root, options.companyDirectory)
+  const companyId = options.companyId ?? slugifyCompanyId(basename(companyDirectory))
   const files: LegacyFile[] = []
   await collectFiles(companyDirectory, companyDirectory, files)
   const extensionCounts: Record<string, number> = {}
@@ -48,40 +78,52 @@ export async function scanLegacyArchive(sourceRoot: string): Promise<LegacyInven
     extensionCounts[extension] = (extensionCounts[extension] ?? 0) + 1
   }
 
-  const observationPath = join(companyDirectory, '_research', 'imports', 'observations.csv')
+  const observationPath = await findObservationPath(companyDirectory, files, options.observationPath)
   let observationRows = 0
   const observationStatuses: Record<string, number> = {}
-  try {
-    const lines = (await readFile(observationPath, 'utf8')).split(/\r?\n/).filter(Boolean)
-    if (lines.length > 1) {
-      observationRows = lines.length - 1
-      for (const line of lines.slice(1)) {
-        const fields = line.split(',')
-        const status = fields[17]?.trim() || '[empty]'
+  if (observationPath) {
+    const rows = parseCsv(await readFile(observationPath, 'utf8'))
+    if (rows.length > 1) {
+      const headers = rows[0]!.map((header) => header.trim())
+      const statusIndex = headers.indexOf('review_status')
+      observationRows = rows.slice(1).filter((row) => row.some((value) => value !== '')).length
+      for (const row of rows.slice(1)) {
+        if (!row.some((value) => value !== '')) continue
+        const status = (statusIndex >= 0 ? row[statusIndex] : undefined)?.trim() || '[empty]'
         observationStatuses[status] = (observationStatuses[status] ?? 0) + 1
       }
     }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
 
-  return { sourceRoot: root, companyDirectory, files, extensionCounts, observationRows, observationStatuses }
+  return {
+    sourceRoot: root,
+    companyDirectory,
+    companyId,
+    observationPath,
+    observationRelativePath: observationPath ? normalizeRelativePath(relative(companyDirectory, observationPath)) : null,
+    files,
+    extensionCounts,
+    observationRows,
+    observationStatuses,
+  }
 }
 
-export function legacyManifest(): CompanyManifest {
+export function legacyManifest(options: LegacyManifestOptions = {}): CompanyManifest {
+  const companyId = options.companyId ?? 'yankuang-energy'
+  const isYankuang = companyId === 'yankuang-energy'
   return {
     schema_version: '0.1',
-    company_id: 'yankuang-energy',
-    name_zh: '兖矿能源集团股份有限公司',
-    name_en: 'Yankuang Energy Group Company Limited',
-    website: 'https://www.ykenergy.com/',
-    jurisdiction: 'CN',
-    accounting_standard: 'CAS',
-    primary_industry: 'coal',
-    securities: [
+    company_id: companyId,
+    ...(options.nameZh || isYankuang ? { name_zh: options.nameZh ?? '兖矿能源集团股份有限公司' } : {}),
+    ...(options.nameEn || isYankuang ? { name_en: options.nameEn ?? 'Yankuang Energy Group Company Limited' } : {}),
+    ...(options.website || isYankuang ? { website: options.website ?? 'https://www.ykenergy.com/' } : {}),
+    jurisdiction: options.jurisdiction ?? 'CN',
+    accounting_standard: options.accountingStandard ?? 'CAS',
+    ...(options.primaryIndustry || isYankuang ? { primary_industry: options.primaryIndustry ?? 'coal' } : {}),
+    securities: options.securities ?? (isYankuang ? [
       { exchange: 'HKEX', ticker: '01171', security_type: 'common_equity' },
       { exchange: 'SSE', ticker: '600188', security_type: 'common_equity' },
-    ],
+    ] : []),
   }
 }
 
@@ -89,32 +131,35 @@ export async function applyLegacyImport(
   inventory: LegacyInventory,
   archive: EquityArchive,
   targetRoot: string,
+  options: LegacyImportOptions = {},
 ): Promise<ImportResult> {
   const target = resolve(targetRoot)
-  const companyPath = join(target, 'yankuang-energy')
+  const companyId = inventory.companyId || 'yankuang-energy'
+  const manifest = options.manifest ?? legacyManifest({ companyId, nameEn: basename(inventory.companyDirectory) })
+  const companyPath = join(target, manifest.company_id)
   await archive.initialize()
-  const workspace = await archive.createCompany(legacyManifest())
-  archive.withDatabase('yankuang-energy', (database) => {
-    applyMetricPack(database, financialCommonPack)
-    applyMetricPack(database, coalPack)
+  const workspace = await archive.createCompany(manifest)
+  archive.withDatabase(manifest.company_id, (database) => {
+    for (const pack of options.metricPacks ?? defaultLegacyMetricPacks(manifest.company_id)) applyMetricPack(database, pack)
   })
 
   let copiedArtifacts = 0
   for (const [index, file] of inventory.files.entries()) {
+    const relativePath = normalizeRelativePath(file.relativePath)
     const sourceId = `legacy-source-${String(index + 1).padStart(4, '0')}`
     const artifactId = `legacy-artifact-${String(index + 1).padStart(4, '0')}`
-    archive.withDatabase('yankuang-energy', (database) => {
+    archive.withDatabase(manifest.company_id, (database) => {
       const now = new Date().toISOString()
       database.prepare(`INSERT INTO sources (
         source_id, source_type, title, publisher, accessed_at, notes, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-        sourceId, file.sourceType, basename(file.relativePath), 'Legacy archive import', now,
-        `Original relative path: ${file.relativePath}`, now,
+        sourceId, file.sourceType, basename(relativePath), 'Legacy archive import', now,
+        `Original relative path: ${relativePath}`, now,
       )
     })
-    await archive.storeArtifact('yankuang-energy', { sourcePath: file.absolutePath }, {
-      artifactId, sourceId, artifactKind: 'original', mediaType: mediaTypeFor(file.relativePath),
-      category: file.category, fileName: basename(file.relativePath), originalRetained: true,
+    await archive.storeArtifact(manifest.company_id, { sourcePath: file.absolutePath }, {
+      artifactId, sourceId, artifactKind: 'original', mediaType: mediaTypeFor(relativePath),
+      category: file.category, fileName: basename(relativePath), originalRetained: true,
     })
     copiedArtifacts += 1
   }
@@ -124,7 +169,7 @@ export async function applyLegacyImport(
     sourceRoot: inventory.sourceRoot,
     targetRoot: target,
     sourceCompanyDirectory: inventory.companyDirectory,
-    companyId: 'yankuang-energy',
+    companyId: manifest.company_id,
     copiedArtifacts,
     observationRows: inventory.observationRows,
     observationStatuses: inventory.observationStatuses,
@@ -141,7 +186,9 @@ export async function stageLegacyObservations(
   inventory: LegacyInventory,
   archive: EquityArchive,
 ): Promise<StagedObservationResult> {
-  const csvPath = join(inventory.companyDirectory, '_research', 'imports', 'observations.csv')
+  if (!inventory.observationPath || !inventory.observationRelativePath) return { observationRows: 0, evidenceRows: 0, mappedRows: 0 }
+  const companyId = inventory.companyId || 'yankuang-energy'
+  const csvPath = inventory.observationPath
   const rows = parseCsv(await readFile(csvPath, 'utf8'))
   if (rows.length < 2) return { observationRows: 0, evidenceRows: 0, mappedRows: 0 }
   const headers = rows[0] ?? []
@@ -151,11 +198,12 @@ export async function stageLegacyObservations(
     if (index.get(header) === undefined) throw new Error(`Legacy CSV is missing required column: ${header}`)
   }
 
-  const result = archive.withDatabase('yankuang-energy', (database) => {
+  const result = archive.withDatabase(companyId, (database) => {
     const artifactRows = database.prepare(`SELECT sa.artifact_id, s.notes
       FROM source_artifacts sa JOIN sources s ON s.source_id = sa.source_id`).all() as Array<{ artifact_id: string; notes: string | null }>
-    const noteArtifact = artifactRows.find((row) => row.notes?.includes('src-legacy-master-note-v1'))
-    if (!noteArtifact) throw new Error('Staging workspace is missing the retained legacy master note artifact')
+    const noteArtifact = artifactRows.find((row) => row.notes?.includes(`Original relative path: ${inventory.observationRelativePath}`))
+      ?? artifactRows.find((row) => row.notes?.includes('src-legacy-master-note-v1'))
+    if (!noteArtifact) throw new Error(`Staging workspace is missing the retained observation artifact: ${inventory.observationRelativePath}`)
     const insertEvidence = database.prepare(`INSERT INTO evidence (
       evidence_id, artifact_id, locator_type, locator_json, excerpt_text, created_at
     ) VALUES (?, ?, 'markdown', ?, ?, ?)`)
@@ -207,6 +255,55 @@ export async function stageLegacyObservations(
   return result
 }
 
+function resolveCompanyDirectory(sourceRoot: string, configuredDirectory?: string): string {
+  const candidate = configuredDirectory
+    ? (isAbsolute(configuredDirectory) ? configuredDirectory : join(sourceRoot, configuredDirectory))
+    : join(sourceRoot, 'Yankuang-Energy')
+  return resolve(candidate)
+}
+
+async function findObservationPath(companyDirectory: string, files: LegacyFile[], configuredPath?: string): Promise<string | null> {
+  if (configuredPath) {
+    const candidate = resolve(isAbsolute(configuredPath) ? configuredPath : join(companyDirectory, configuredPath))
+    if (!files.some((file) => resolve(file.absolutePath) === candidate)) throw new Error(`Observation CSV does not exist inside the selected company archive: ${candidate}`)
+    return candidate
+  }
+  const preferred = files.find((file) => file.relativePath.replaceAll('\\', '/') === '_research/imports/observations.csv')
+  const fallback = files.find((file) => basename(file.relativePath).toLowerCase() === 'observations.csv')
+  return preferred?.absolutePath ?? fallback?.absolutePath ?? null
+}
+
+function slugifyCompanyId(directoryName: string): string {
+  const slug = directoryName.normalize('NFKD').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase()
+  return slug || 'legacy-company'
+}
+
+export function defaultLegacyMetricPackNames(companyId: string): readonly string[] {
+  return companyId === 'yankuang-energy' ? ['financial-common', 'coal'] : ['financial-common']
+}
+
+function defaultLegacyMetricPacks(companyId: string): readonly MetricPack[] {
+  return companyId === 'yankuang-energy' ? [financialCommonPack, coalPack] : [financialCommonPack]
+}
+
+export function refreshLegacyMappings(database: DatabaseSync): number {
+  const update = database.prepare(`UPDATE legacy_observations SET mapped_metric_id = ?
+    WHERE legacy_metric_id = ? AND mapped_metric_id IS NULL
+      AND EXISTS (SELECT 1 FROM metric_definitions WHERE metric_id = ? AND active = 1)`)
+  let count = 0
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    for (const [legacyMetricId, mappedMetricId] of Object.entries(legacyMetricMap)) {
+      count += Number(update.run(mappedMetricId, legacyMetricId, mappedMetricId).changes)
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+  return count
+}
+
 async function collectFiles(directory: string, base: string, files: LegacyFile[]): Promise<void> {
   const entries = await readdir(directory, { withFileTypes: true })
   for (const entry of entries) {
@@ -217,14 +314,14 @@ async function collectFiles(directory: string, base: string, files: LegacyFile[]
       continue
     }
     if (!entry.isFile()) continue
-    const relativePath = relative(base, absolutePath)
+    const relativePath = normalizeRelativePath(relative(base, absolutePath))
     const size = (await stat(absolutePath)).size
     files.push({ absolutePath, relativePath, size, ...classification(relativePath) })
   }
 }
 
 function classification(relativePath: string): Pick<LegacyFile, 'category' | 'sourceType'> {
-  const normalized = relativePath.replaceAll('\\', '/').toLowerCase()
+  const normalized = normalizeRelativePath(relativePath).toLowerCase()
   if (normalized.startsWith('_reports/')) return { category: 'analyst', sourceType: 'analyst_report' }
   if (normalized.includes('/periodic reports/') || normalized.includes('/annual shareholder meetings/')) {
     return { category: 'filings', sourceType: 'filing' }
@@ -234,6 +331,10 @@ function classification(relativePath: string): Pick<LegacyFile, 'category' | 'so
     return { category: 'curated', sourceType: 'manual' }
   }
   return { category: 'other', sourceType: 'other' }
+}
+
+function normalizeRelativePath(path: string): string {
+  return path.replaceAll('\\', '/')
 }
 
 function extnameSafe(path: string): string {

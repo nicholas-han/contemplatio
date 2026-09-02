@@ -13,8 +13,8 @@ export interface BulkPromotionResult {
   skipped: Array<{ observationId: string; reason: string }>
 }
 
-export function planLegacyPromotions(archive: EquityArchive, observationIds?: string[]): PromotionPlan[] {
-  return archive.withDatabase('yankuang-energy', (database) => {
+export function planLegacyPromotions(archive: EquityArchive, observationIds?: string[], companyId = 'yankuang-energy'): PromotionPlan[] {
+  return archive.withDatabase(companyId, (database) => {
     const rows = observationIds?.length
       ? database.prepare(`SELECT observation_id, mapped_metric_id, review_status, period_kind, period_start, value, period_end, evidence_id, promoted_fact_id
           FROM legacy_observations WHERE observation_id IN (${observationIds.map(() => '?').join(',')})`).all(...observationIds)
@@ -42,14 +42,14 @@ export function planLegacyPromotions(archive: EquityArchive, observationIds?: st
   })
 }
 
-export function promoteLegacyObservations(archive: EquityArchive, observationIds: string[]): number {
-  const plans = planLegacyPromotions(archive, observationIds)
+export function promoteLegacyObservations(archive: EquityArchive, observationIds: string[], companyId = 'yankuang-energy'): number {
+  const plans = planLegacyPromotions(archive, observationIds, companyId)
   const blocked = plans.filter((plan) => !plan.allowed)
   if (blocked.length) {
     throw new Error(blocked.map((plan) => `${plan.observationId}: ${plan.reason}`).join('; '))
   }
 
-  return archive.withDatabase('yankuang-energy', (database) => {
+  return archive.withDatabase(companyId, (database) => {
     const rows = database.prepare(`SELECT observation_id, mapped_metric_id, period_kind, period_start, period_end, value, unit, dimensions_text,
         evidence_id, imported_at FROM legacy_observations WHERE observation_id IN (${observationIds.map(() => '?').join(',')})`).all(...observationIds) as Array<{
       observation_id: string; mapped_metric_id: string; period_kind: string; period_start: string | null; period_end: string;
@@ -83,8 +83,8 @@ export function promoteLegacyObservations(archive: EquityArchive, observationIds
   })
 }
 
-export function bulkPromoteLegacyUnverified(archive: EquityArchive): BulkPromotionResult {
-  return archive.withDatabase('yankuang-energy', (database) => {
+export function bulkPromoteLegacyUnverified(archive: EquityArchive, companyId = 'yankuang-energy'): BulkPromotionResult {
+  return archive.withDatabase(companyId, (database) => {
     const rows = database.prepare(`SELECT observation_id, mapped_metric_id, period_kind, period_start, period_end,
         value, unit, dimensions_text, evidence_id, imported_at, promoted_fact_id
       FROM legacy_observations WHERE promoted_fact_id IS NULL ORDER BY observation_id`).all() as Array<{

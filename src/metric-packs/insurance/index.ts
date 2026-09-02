@@ -6,7 +6,10 @@ const metric = (name: string, zh: string, en: string, unit: string, period: 'dur
 })
 
 export const insurancePack: MetricPack = {
-  id: 'insurance', version: '0.1.0', metrics: [
+  id: 'insurance', version: '0.1.0', business_lines: [
+    { business_line_type_id: 'insurance.life_and_health', industry_id: 'insurance', label_zh: '寿险与健康险', label_en: 'Life & Health' },
+    { business_line_type_id: 'insurance.p_and_c', industry_id: 'insurance', label_zh: '财产险', label_en: 'Property & Casualty' },
+  ], metrics: [
     metric('gross_written_premium', '原保险保费收入', 'Gross written premium', 'CNY'), metric('new_business_value', '新业务价值', 'New business value', 'CNY'),
     metric('embedded_value', '内含价值', 'Embedded value', 'CNY', 'instant'), metric('value_of_new_business_margin', '新业务价值率', 'Value of new business margin', 'percent'),
     metric('solvency_ratio', '综合偿付能力充足率', 'Solvency ratio', 'percent', 'instant'), metric('combined_ratio', '综合成本率', 'Combined ratio', 'percent'),

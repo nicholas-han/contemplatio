@@ -14,5 +14,16 @@ export interface MetricDefinition {
   allowed_dimensions: string[]
 }
 
-export interface MetricPack { id: string; version: string; metrics: readonly MetricDefinition[] }
+export interface BusinessLineDefinition {
+  business_line_type_id: string
+  industry_id: string
+  label_zh?: string
+  label_en?: string
+}
 
+export interface MetricPack {
+  id: string
+  version: string
+  metrics: readonly MetricDefinition[]
+  business_lines?: readonly BusinessLineDefinition[]
+}
