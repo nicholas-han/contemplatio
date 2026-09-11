@@ -141,7 +141,7 @@ def preserve(repo: Path, archive: Path, destination: Path) -> dict:
             metadata = backup_database(source, target) if database else copy_verified(source, target)
             if source in evidence_paths:
                 sha, size = evidence_paths[source]
-                if metadata['sha256'] != sha or metadata['size'] != size:
+                if metadata['sha256'] != sha or (size is not None and metadata['size'] != size):
                     raise RuntimeError(f'Registered evidence checksum mismatch: {source}')
             report['files'].append({'source': str(source), 'target': str(target.relative_to(destination)), **metadata})
             inventory[index]['status'] = 'backed_up'

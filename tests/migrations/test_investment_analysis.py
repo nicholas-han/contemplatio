@@ -52,6 +52,40 @@ class MigrationTests(unittest.TestCase):
             preserve(repo, archive, root / 'second-copy')
             self.assertFalse((root / 'second-copy/repository/.git').exists())
 
+    def test_preserve_evidence_with_optional_size_and_required_hash(self):
+        cases = [(None, True, True), (8, True, True),
+                 (None, False, False), (0, True, False)]
+        for size, correct_hash, accepted in cases:
+            with self.subTest(size=size, correct_hash=correct_hash), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                repo, archive = root / 'repo', root / 'archive'
+                repo.mkdir()
+                unitree = archive / '宇树科技'
+                unitree.mkdir(parents=True)
+                evidence = unitree / 'evidence.txt'
+                evidence.write_bytes(b'evidence')
+                sha = digest(evidence) if correct_hash else '0' * 64
+                with closing(sqlite3.connect(unitree / 'company.sqlite')) as c:
+                    c.execute('CREATE TABLE document_files(relative_path TEXT, sha256 TEXT, byte_size INTEGER)')
+                    c.execute('INSERT INTO document_files VALUES (?, ?, ?)',
+                              ('evidence.txt', sha, size))
+                    c.commit()
+                destination = root / 'copy'
+                if accepted:
+                    result = preserve(repo, archive, destination)
+                    self.assertEqual(result['status'], 'complete')
+                    copied = destination / 'archive/宇树科技/evidence.txt'
+                    self.assertEqual(copied.read_bytes(), evidence.read_bytes())
+                    entry = next(item for item in result['files']
+                                 if item['target'] == 'archive/宇树科技/evidence.txt')
+                    self.assertEqual(entry['size'], 8)
+                    self.assertEqual(entry['sha256'], digest(evidence))
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'Registered evidence checksum mismatch'):
+                        preserve(repo, archive, destination)
+                    report = json.loads((destination / 'preservation.json').read_text())
+                    self.assertEqual(report['status'], 'failed')
+
     def make_fixture(self, root):
         archive, target = root / 'archive', root / 'target'
         company = archive / '测试公司'
