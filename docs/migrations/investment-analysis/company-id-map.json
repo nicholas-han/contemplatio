@@ -1,0 +1,206 @@
+{
+  "status": "proposed_not_applied",
+  "source_commit": "b57076f3c94e60c070637a29e50d8737acd3ef64",
+  "companies": [
+    {
+      "legacy_company_id": 100000,
+      "proposed_company_id": "yankuang-energy",
+      "common_name": "兖矿能源"
+    },
+    {
+      "legacy_company_id": 100001,
+      "proposed_company_id": "china-merchants-bank",
+      "common_name": "招商银行"
+    },
+    {
+      "legacy_company_id": 100002,
+      "proposed_company_id": "ping-an",
+      "common_name": "中国平安"
+    },
+    {
+      "legacy_company_id": 100003,
+      "proposed_company_id": "china-life",
+      "common_name": "中国人寿"
+    },
+    {
+      "legacy_company_id": 100004,
+      "proposed_company_id": "picc",
+      "common_name": "中国人保"
+    },
+    {
+      "legacy_company_id": 100005,
+      "proposed_company_id": "cpic",
+      "common_name": "中国太保"
+    },
+    {
+      "legacy_company_id": 100006,
+      "proposed_company_id": "aia",
+      "common_name": "友邦保险"
+    },
+    {
+      "legacy_company_id": 100007,
+      "proposed_company_id": "prudential",
+      "common_name": "保诚"
+    },
+    {
+      "legacy_company_id": 100008,
+      "proposed_company_id": "china-mobile",
+      "common_name": "中国移动"
+    },
+    {
+      "legacy_company_id": 100009,
+      "proposed_company_id": "china-telecom",
+      "common_name": "中国电信"
+    },
+    {
+      "legacy_company_id": 100010,
+      "proposed_company_id": "china-unicom",
+      "common_name": "中国联通"
+    },
+    {
+      "legacy_company_id": 100011,
+      "proposed_company_id": "byd",
+      "common_name": "比亚迪"
+    },
+    {
+      "legacy_company_id": 100012,
+      "proposed_company_id": "midea-group",
+      "common_name": "美的集团"
+    },
+    {
+      "legacy_company_id": 100013,
+      "proposed_company_id": "spring-airlines",
+      "common_name": "春秋航空"
+    },
+    {
+      "legacy_company_id": 100014,
+      "proposed_company_id": "guotai-haitong",
+      "common_name": "国泰海通"
+    },
+    {
+      "legacy_company_id": 100015,
+      "proposed_company_id": "east-money",
+      "common_name": "东方财富"
+    },
+    {
+      "legacy_company_id": 100016,
+      "proposed_company_id": "robinhood",
+      "common_name": "Robinhood"
+    },
+    {
+      "legacy_company_id": 100017,
+      "proposed_company_id": "hundsun-technologies",
+      "common_name": "恒生电子"
+    },
+    {
+      "legacy_company_id": 100018,
+      "proposed_company_id": "nvidia",
+      "common_name": "NVIDIA"
+    },
+    {
+      "legacy_company_id": 100019,
+      "proposed_company_id": "arm-holdings",
+      "common_name": "Arm Holdings"
+    },
+    {
+      "legacy_company_id": 100020,
+      "proposed_company_id": "tsmc",
+      "common_name": "台积电"
+    },
+    {
+      "legacy_company_id": 100021,
+      "proposed_company_id": "google",
+      "common_name": "Google"
+    },
+    {
+      "legacy_company_id": 100022,
+      "proposed_company_id": "amd",
+      "common_name": "AMD"
+    },
+    {
+      "legacy_company_id": 100023,
+      "proposed_company_id": "sk-hynix",
+      "common_name": "SK Hynix"
+    },
+    {
+      "legacy_company_id": 100024,
+      "proposed_company_id": "futu",
+      "common_name": "Futu"
+    },
+    {
+      "legacy_company_id": 100025,
+      "proposed_company_id": "guosen-securities",
+      "common_name": "国信证券"
+    },
+    {
+      "legacy_company_id": 100026,
+      "proposed_company_id": "gf-securities",
+      "common_name": "广发证券"
+    },
+    {
+      "legacy_company_id": 100027,
+      "proposed_company_id": "cicc",
+      "common_name": "中金公司"
+    },
+    {
+      "legacy_company_id": 100028,
+      "proposed_company_id": "citic-securities",
+      "common_name": "中信证券"
+    },
+    {
+      "legacy_company_id": 100029,
+      "proposed_company_id": "csc-financial",
+      "common_name": "中信建投"
+    },
+    {
+      "legacy_company_id": 100030,
+      "proposed_company_id": "china-merchants-securities",
+      "common_name": "招商证券"
+    },
+    {
+      "legacy_company_id": 100031,
+      "proposed_company_id": "everbright-securities",
+      "common_name": "光大证券"
+    },
+    {
+      "legacy_company_id": 100032,
+      "proposed_company_id": "shenwan-hongyuan",
+      "common_name": "申万宏源"
+    },
+    {
+      "legacy_company_id": 100033,
+      "proposed_company_id": "china-galaxy-securities",
+      "common_name": "中国银河"
+    },
+    {
+      "legacy_company_id": 100034,
+      "proposed_company_id": "huatai-securities",
+      "common_name": "华泰证券"
+    },
+    {
+      "legacy_company_id": 100035,
+      "proposed_company_id": "capital-securities",
+      "common_name": "群益证券"
+    },
+    {
+      "legacy_company_id": 100036,
+      "proposed_company_id": "china-construction-bank",
+      "common_name": "建设银行"
+    },
+    {
+      "legacy_company_id": 100037,
+      "proposed_company_id": "webull",
+      "common_name": "Webull"
+    },
+    {
+      "legacy_company_id": 100038,
+      "proposed_company_id": "guanghui-energy",
+      "common_name": "广汇能源"
+    },
+    {
+      "legacy_company_id": 100039,
+      "proposed_company_id": "unitree",
+      "common_name": "宇树科技"
+    }
+  ]
+}

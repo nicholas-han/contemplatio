@@ -1,0 +1,9 @@
+.DS_Store
+.obsidian/
+__pycache__/
+*.pyc
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+config/local.json
+tmp/
