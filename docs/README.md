@@ -1,21 +1,23 @@
 # Contemplatio 文档总目录
 
-按文档用途归档。现行系统以架构规范及实现为准；长期业务需求和历史试点不能视作已经交付的功能。
+公司研究系统与微博 Chrome 扩展独立维护。需求描述不等于已验收；当前行为以各工程的架构、使用指南和实现为准。
 
-| 目录 | 内容与入口 | 状态 |
-|---|---|---|
-| `principles/` | [投资理念与方法](principles/README.md) | 个人研究原则，非程序默认投资规则 |
-| `requirements/` | [业务需求](requirements/README.md) | 长期需求基线，包含未实现范围 |
-| `architecture/` | [中文 v0.1](architecture/v0.1.zh.md)、[English v0.1](architecture/v0.1.md) | 当前架构基线，两种语言同步维护 |
-| `guides/` | [开发与操作](guides/operations.md) | 当前命令、配置与工作流 |
-| `migrations/` | [早期档案盘点](migrations/equity-archive/inventory-2026-08-30.md) | 外部档案的现状记录 |
+| 工程 | 需求 | 架构 | 操作 |
+| --- | --- | --- | --- |
+| 公司研究 v0.1 | [公司信息框架](requirements/company-research.md)、[研究系统](requirements/research-system.md) | [中文](architecture/v0.1.zh.md)、[English](architecture/v0.1.md) | [开发与操作](guides/operations.md) |
+| 微博扩展 0.3.3 | [PRD v0.2 与已确认补充](requirements/PRD_Weibo_Semantic_Filter_Chrome_Extension_MVP_v0.2.md) | [扩展架构](architecture/weibo-semantic-filter-mvp.md) | [安装、规则、反馈与更新](guides/weibo-extension.md) |
 
-## 归档规则
+其他入口：
 
-- 根 README 只保留项目简介和入口；详细操作放 `guides/`。
-- 研究理念放 `principles/`，要解决的业务问题放 `requirements/`，实现契约放 `architecture/`。
-- 日期明确的盘点、迁移评估和验收记录放对应 `migrations/<来源>/`；提案须注明尚未实施。
-- 被取代的规范不作为当前仓库内容保留；当前契约只在 `architecture/`、`requirements/` 和 `guides/` 中维护。
-- 同一正文只有一个维护位置，用相对链接引用。迁移清单记录源路径和 SHA-256；恢复备份保持原始内容，不作为第二套现行文档。
-- 新文件使用小写连字符命名；语言版本使用 `.zh.md`；审计快照使用 `YYYY-MM-DD`。历史来源文件名保留以便追溯。
-- 公司原始材料、数据库、模型文件和研究输出按公司保存在外部 archive 的 company workspace；`companies/` 中的本地备份不进 Git，也不归入系统说明文档。
+- [投资理念与方法](principles/README.md)：个人研究原则，非程序默认投资规则。
+- [需求索引](requirements/README.md)：业务需求及工程边界。
+- [外部档案盘点](migrations/equity-archive/inventory-2026-08-30.md)：历史迁移记录。
+- [旧微博试点退役记录](migrations/weibo-pilot/retirement-2026-09-21.md)：已移除内容、停用任务、保留数据与恢复备份。
+
+## 维护约定
+
+- 根 README 保留项目简介和入口，详细操作放 `guides/`；需求、架构与验证结果明确区分。
+- 当前契约同步更新，不保留与实现相矛盾的旧操作步骤。被替代的运行方案退出现行文档，迁移事实记入 `migrations/`。
+- 同一正文尽量只有一个维护位置；两种语言的公司研究架构同步维护。
+- 新文件使用小写连字符命名，语言版本用 `.zh.md`。用户引用过的历史来源文件名可保留，并注明当前修订范围。
+- 公司原始材料、数据库、密钥和恢复备份不归入现行系统文档；`companies/`、`.data/`、`.env` 不进 Git。

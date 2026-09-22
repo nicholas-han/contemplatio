@@ -4,4 +4,4 @@ coverage/
 .DS_Store
 companies/
 .env
-
+.data/

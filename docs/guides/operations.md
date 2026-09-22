@@ -1,6 +1,6 @@
 # 开发与操作指南
 
-命令均从 contemplatio 仓库根目录执行。
+本指南针对公司研究系统，命令均从 contemplatio 仓库根目录执行。微博 Chrome 扩展独立构建和运行，请看[扩展使用指南](weibo-extension.md)；根目录的 `npm test` 不包含扩展测试。
 
 ## Requirements
 
