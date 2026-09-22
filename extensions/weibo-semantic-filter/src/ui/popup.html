@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>微博语义过滤</title><link rel="stylesheet" href="ui.css"></head><body class="popup"><main>
+<div class="row between"><h1>微博语义过滤</h1><label><input id="enabled" type="checkbox"> 启用</label></div>
+<select id="mode" aria-label="过滤模式"><option value="shadow">观察模式 · 只标记建议</option><option value="active">自动模式 · 原地过滤</option></select>
+<section class="panel"><div class="metrics"><div><strong id="scanned">—</strong><span>本页已扫描</span></div><div><strong id="collapsed">—</strong><span>当前已折叠</span></div><div><strong id="dimmed">—</strong><span>当前已灰化</span></div></div><p id="suggested" class="muted"></p><p id="diagnostic" class="muted"></p></section>
+<p id="provider" class="muted"></p><div class="row"><button id="expandAll">本页全部展开</button><button id="rescan">重新扫描</button><button id="options">设置</button></div><p id="status" role="status"></p>
+</main><script src="popup.js"></script></body></html>

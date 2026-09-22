@@ -21,21 +21,27 @@
     "test": "node --test --import tsx tests/**/*.test.ts",
     "seed:yankuang": "node --env-file-if-exists=.env --import tsx scripts/seed-yankuang.ts",
     "import:legacy": "node --env-file-if-exists=.env --import tsx scripts/import-legacy.ts",
-    "stage:legacy-observations": "node --env-file-if-exists=.env --import tsx scripts/stage-legacy-observations.ts"
-    ,"promote:legacy": "node --env-file-if-exists=.env --import tsx scripts/promote-legacy.ts",
-    "review:legacy": "node --env-file-if-exists=.env --import tsx scripts/review-legacy.ts"
-    ,"web:dev": "node --env-file-if-exists=.env --import tsx scripts/start-web.ts",
-    "promote:legacy-unverified": "node --env-file-if-exists=.env --import tsx scripts/promote-legacy-unverified.ts"
-    ,"normalize:legacy-periods": "node --env-file-if-exists=.env --import tsx scripts/normalize-legacy-periods.ts"
-    ,"refresh:legacy-mappings": "node --env-file-if-exists=.env --import tsx scripts/refresh-legacy-mappings.ts"
-    ,"import:estimates": "node --env-file-if-exists=.env --import tsx scripts/import-estimates.ts"
-    ,"import:management": "node --env-file-if-exists=.env --import tsx scripts/import-management.ts"
-    ,"import:cap-table": "node --env-file-if-exists=.env --import tsx scripts/import-cap-table.ts"
-    ,"import:facts": "node --env-file-if-exists=.env --import tsx scripts/import-facts.ts"
-    ,"company:create": "node --env-file-if-exists=.env --import tsx scripts/create-company.ts"
-    ,"metric-pack:apply": "node --env-file-if-exists=.env --import tsx scripts/apply-metric-pack.ts"
-    ,"archive:audit": "node --env-file-if-exists=.env --import tsx scripts/audit-archive.ts"
-    ,"archive:export": "node --env-file-if-exists=.env --import tsx scripts/export-company.ts"
+    "stage:legacy-observations": "node --env-file-if-exists=.env --import tsx scripts/stage-legacy-observations.ts",
+    "promote:legacy": "node --env-file-if-exists=.env --import tsx scripts/promote-legacy.ts",
+    "review:legacy": "node --env-file-if-exists=.env --import tsx scripts/review-legacy.ts",
+    "web:dev": "node --env-file-if-exists=.env --import tsx scripts/start-web.ts",
+    "promote:legacy-unverified": "node --env-file-if-exists=.env --import tsx scripts/promote-legacy-unverified.ts",
+    "normalize:legacy-periods": "node --env-file-if-exists=.env --import tsx scripts/normalize-legacy-periods.ts",
+    "refresh:legacy-mappings": "node --env-file-if-exists=.env --import tsx scripts/refresh-legacy-mappings.ts",
+    "import:estimates": "node --env-file-if-exists=.env --import tsx scripts/import-estimates.ts",
+    "import:management": "node --env-file-if-exists=.env --import tsx scripts/import-management.ts",
+    "import:cap-table": "node --env-file-if-exists=.env --import tsx scripts/import-cap-table.ts",
+    "import:facts": "node --env-file-if-exists=.env --import tsx scripts/import-facts.ts",
+    "company:create": "node --env-file-if-exists=.env --import tsx scripts/create-company.ts",
+    "metric-pack:apply": "node --env-file-if-exists=.env --import tsx scripts/apply-metric-pack.ts",
+    "archive:audit": "node --env-file-if-exists=.env --import tsx scripts/audit-archive.ts",
+    "archive:export": "node --env-file-if-exists=.env --import tsx scripts/export-company.ts",
+    "weibo:check": "npm --prefix extensions/weibo-semantic-filter run check",
+    "weibo:test": "npm --prefix extensions/weibo-semantic-filter run test",
+    "weibo:build": "npm --prefix extensions/weibo-semantic-filter run build",
+    "weibo:package": "npm --prefix extensions/weibo-semantic-filter run package",
+    "weibo:evaluate": "npm --prefix extensions/weibo-semantic-filter run evaluate",
+    "weibo:test:browser": "npm --prefix extensions/weibo-semantic-filter run test:browser"
   },
   "engines": {
     "node": ">=22.5"

@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "微博语义过滤",
+  "version": "0.3.3",
+  "description": "在微博原网页按账号规则保守过滤，支持观察模式与一键展开。",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://weibo.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://weibo.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "微博语义过滤"
+  },
+  "options_page": "options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
