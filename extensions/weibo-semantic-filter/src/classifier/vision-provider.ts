@@ -1,3 +1,4 @@
+import {VISION_TIMEOUT_MS} from '../shared/request-budget';
 import {ProviderError} from './jev-provider';
 import {VISION_MODEL,type Settings} from '../shared/settings';
 import {validImageUrl} from '../shared/media';
@@ -20,7 +21,7 @@ export class VisionProvider {
   constructor(private key:string,private fetcher:typeof fetch=fetch){}
   async classify(post:WeiboPost,signal:AbortSignal):Promise<{result:VisualResult;model:string;latencyMs:number;inputTokens:number;outputTokens:number}>{
     if(!post.imagesComplete||!post.imageUrls?.length||post.imageUrls.length>9||post.imageUrls.some(u=>!validImageUrl(u)))throw new ProviderError('format');
-    const started=performance.now(),timeout=AbortSignal.timeout(15000);
+    const started=performance.now(),timeout=AbortSignal.timeout(VISION_TIMEOUT_MS);
     try {
       const response=await this.fetcher.call(globalThis,'https://ai-gateway.vercel.sh/v1/chat/completions',{
         method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${this.key}`},credentials:'omit',redirect:'error',referrerPolicy:'no-referrer',signal:AbortSignal.any([signal,timeout]),

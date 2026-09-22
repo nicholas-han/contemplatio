@@ -5,6 +5,7 @@ import {localDecision,policyDecision,requiredDecisions,needsVision} from '../pol
 import {JevProvider,ProviderError} from '../classifier/jev-provider';
 import {VisionProvider,visualDecision} from '../classifier/vision-provider';
 import {RequestQueue} from './request-queue';
+import {CLASSIFY_ATTEMPTS,RETRY_DELAY_MS} from '../shared/request-budget';
 import {cacheKey,getCached,putCached,recordFeedback,clearCache,clearFeedback,exportFeedback,policyStamp} from '../storage/local';
 
 let settings:Settings=structuredClone(DEFAULT_SETTINGS),apiKey='';
@@ -32,10 +33,10 @@ async function classify(post:WeiboPost,s:Settings,signal:AbortSignal):Promise<De
   const shared=inflight.get(id);if(shared)return shared;
   const task=queue.run(async()=>{
     if(signal.aborted) return unavailable('设置已变化');
-    if(Date.now()<breaker.until)return unavailable('语义服务冷却中');
     const provider=new JevProvider(s.endpoint,apiKey,s.model,s.timeoutMs);
-    for(let attempt=0;attempt<2;attempt++){
+    for(let attempt=0;attempt<CLASSIFY_ATTEMPTS;attempt++){
       if(signal.aborted)return unavailable('设置已变化');
+      if(Date.now()<breaker.until)return unavailable('语义服务冷却中');
       try{
         const decisions=requiredDecisions(post,s);
         const hasText=!!(post.text+post.repostText).trim();
@@ -52,16 +53,16 @@ async function classify(post:WeiboPost,s:Settings,signal:AbortSignal):Promise<De
           decision={...(filtered??{state:'visible' as const,source:'protected' as const,reason:visual.result.allImagesUnderstood?'图片未命中体育或纯风景规则':'图片无法完整识别，保留'}),model:visual.model,latencyMs:result.latencyMs+visual.latencyMs};
           stats.inputTokens+=visual.inputTokens;stats.outputTokens+=visual.outputTokens;
         }
-        breaker={failures:0,until:0};stats.lastError='';stats.inputTokens+=result.inputTokens??0;stats.outputTokens+=result.outputTokens??0;
+        breaker={failures:0,until:breaker.until>Date.now()?breaker.until:0};stats.lastError='';stats.inputTokens+=result.inputTokens??0;stats.outputTokens+=result.outputTokens??0;
         await putCached(id,decision).catch(()=>{});await persistStats();return decision;
       }catch(e){
         const error=e instanceof ProviderError?e:new ProviderError('network');
         if(error.code==='cancelled')return unavailable('设置已变化');
         stats.errors++;stats.lastError=error.code;
-        if(attempt===0&&['network','timeout','server'].includes(error.code)){await new Promise(r=>setTimeout(r,300));continue;}
+        if(attempt<CLASSIFY_ATTEMPTS-1&&['network','timeout','server'].includes(error.code)){await new Promise(r=>setTimeout(r,RETRY_DELAY_MS));continue;}
         breaker.failures++;
-        if(error.code==='rate_limit')breaker.until=Date.now()+error.retryAfterMs;
-        else if(error.code==='auth'||breaker.failures>=3)breaker.until=Date.now()+60000;
+        if(error.code==='rate_limit')breaker.until=Math.max(breaker.until,Date.now()+error.retryAfterMs);
+        else if(error.code==='auth'||breaker.failures>=3)breaker.until=Math.max(breaker.until,Date.now()+60000);
         await persistStats();return unavailable(`语义服务暂时不可用（${error.code}）`);
       }
     }

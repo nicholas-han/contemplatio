@@ -3,6 +3,7 @@ import {installStyle,render,renderStatus,restore} from './renderer';
 import {DEFAULT_SETTINGS,POLICY_VERSION,SCHEMA_VERSION,type Settings} from '../shared/settings';
 import {accountScopeDecision} from '../policy/decision-engine';
 import {rpc} from '../shared/messages';
+import {pageRequestTimeout} from '../shared/request-budget';
 import type {Decision,DisplayState,WeiboPost} from '../shared/types';
 
 type Entry={post:WeiboPost;decision?:Decision;revision:string;pending:boolean};
@@ -42,7 +43,7 @@ function pump(){
     let timer:ReturnType<typeof setTimeout>;
     void Promise.race([
       rpc<{revision:string;decision:Decision}>({type:'decide',post:entry.post,revision,sessionId}),
-      new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout')),55000);}),
+      new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout')),pageRequestTimeout(settings));}),
     ]).then(result=>{
       if(disposed||entries.get(card)!==entry||route!==page||settings.revision!==revision||!card.isConnected)return;
       if(extractPost(card)?.elementFingerprint!==fingerprint){inspect([card]);return;}

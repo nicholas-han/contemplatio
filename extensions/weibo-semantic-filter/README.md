@@ -54,6 +54,6 @@ npm run evaluate -- /absolute/path/to/weibo-feedback.json
 
 报告包含误折叠率、精确率、召回和延迟；缺样本不能宣称达标。当前评估门槛要求至少 100 条、三个会话、单一配置和至多一个实际模型，应对文字/图片分别评估。脚本不会自动修改设置或启用 Active，实际费用查服务商账单。
 
-当前验证为 36 项自动测试、14 项独立 Chrome 检查，且用户 Jev 连通及真实页面标签已验证。图片真实效果、完整中文标注集和一周试用仍待验收。
+当前验证为 38 项自动测试、14 项独立 Chrome 检查，且用户 Jev 连通及真实页面标签已验证。图片真实效果、完整中文标注集和一周试用仍待验收。
 
 需求与实现契约见 [PRD](../../docs/requirements/PRD_Weibo_Semantic_Filter_Chrome_Extension_MVP_v0.2.md) 和[架构](../../docs/architecture/weibo-semantic-filter-mvp.md)。
