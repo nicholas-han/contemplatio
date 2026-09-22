@@ -119,6 +119,18 @@ try{
   const fixtureUrl='data:application/json,'+encodeURIComponent(JSON.stringify({model:'fixture',answers:{social_interaction:{type:'noul',noul:.95}}}));
   const nativeResult=await worker.evaluate(providerBundle.outputFiles[0].text+`; new WSFProviderTest.JevProvider(${JSON.stringify(fixtureUrl)},'test-only','fixture',1000).classify({text:'test',repostText:'',visibleContext:'',decisions:['social_interaction']},new AbortController().signal)`);
   assert.equal(nativeResult.scores.social_interaction,.95);log.push('Provider completes a request using native fetch inside the Chrome extension worker.');
+  const popup=await context.newPage();await popup.goto(`chrome-extension://${id}/popup.html`);
+  await popup.waitForFunction(()=>!document.querySelector('#enabled').disabled);
+  await popup.selectOption('#mode','active');
+  await popup.waitForFunction(()=>document.querySelector('#status').textContent==='已保存'&&!document.querySelector('#mode').disabled);
+  await popup.uncheck('#enabled');
+  await popup.waitForFunction(()=>document.querySelector('#status').textContent==='已保存'&&!document.querySelector('#enabled').disabled);
+  assert.equal(await page.locator('[data-wsf-control="bar"]').count(),0);
+  await popup.check('#enabled');
+  await popup.waitForFunction(()=>document.querySelector('#status').textContent==='已保存'&&!document.querySelector('#enabled').disabled);
+  const popupSettings=await popup.evaluate(async()=>{const r=await chrome.runtime.sendMessage({type:'getSettings'});return {enabled:r.data.settings.enabled,mode:r.data.settings.mode};});
+  assert.deepEqual(popupSettings,{enabled:true,mode:'active'});
+  log.push('Popup saves mode and enabled state with fresh revisions and restores controls after saving.');
   assert.deepEqual(errors,[]);
   await writeFile('artifacts/browser-test-report.json',JSON.stringify({date:new Date().toISOString(),browser:context.browser()?.version(),checks:log,modelCalls:stats.calls,errors},null,2));
   console.log(JSON.stringify({passed:log.length,checks:log,errors}));

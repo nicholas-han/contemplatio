@@ -82,6 +82,6 @@ npm run weibo:package
 npm run weibo:evaluate -- /absolute/path/to/weibo-feedback.json
 ```
 
-真实浏览器回归方法见[开发说明](../../extensions/weibo-semantic-filter/README.md)。当前有 38 项扩展自动测试、14 项独立 Chrome 检查和 30 条匿名 DOM fixture；浏览器报告与截图在 `artifacts/`，不随安装包发布。用户 Jev 连接与页面标签已验证，100–200 条真实中文标注、图片效果和一周日用验收尚未完成。
+真实浏览器回归方法见[开发说明](../../extensions/weibo-semantic-filter/README.md)。当前有 39 项扩展自动测试、15 项独立 Chrome 检查和 30 条匿名 DOM fixture；浏览器报告与截图在 `artifacts/`，不随安装包发布。用户 Jev 连接与页面标签已验证，100–200 条真实中文标注、图片效果和一周日用验收尚未完成。
 
 旧抓取任务、独立阅读器及相应命令已移除，不要再运行旧 `weibo:fetch`、`weibo:web`、`weibo:daemon`。历史数据库仍保留，详情见[退役记录](../migrations/weibo-pilot/retirement-2026-09-21.md)。
