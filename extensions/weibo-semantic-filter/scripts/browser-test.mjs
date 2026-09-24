@@ -131,7 +131,61 @@ try{
   const popupSettings=await popup.evaluate(async()=>{const r=await chrome.runtime.sendMessage({type:'getSettings'});return {enabled:r.data.settings.enabled,mode:r.data.settings.mode};});
   assert.deepEqual(popupSettings,{enabled:true,mode:'active'});
   log.push('Popup saves mode and enabled state with fresh revisions and restores controls after saving.');
+  await options.reload();await options.waitForFunction(()=>document.querySelector('#endpoint').value.includes('typesafe.ai'));
+  await options.check('#namedPeople');await options.selectOption('#mode','shadow');await options.click('button[type="submit"]');
+  await options.waitForFunction(()=>document.querySelector('#status').textContent==='已保存');
+  const namedRepost=card('2820792015','NamedRepost','').replace('<div class="_wbtext_fixture_1"></div>','').replace('</article>','<div class="retweet"><div class="wbpro-feed-reText"><div><a usercard="1234567890" href="/u/1234567890">@否极泰董宝珍</a></div><div class="_wbtext_fixture_1">公司经营数据……<span class="expand">展开</span></div></div></div></article>');
+  await page.evaluate(html=>document.body.insertAdjacentHTML('beforeend',html),namedRepost);
+  const namedCard=page.locator('article').last();await namedCard.scrollIntoViewIfNeeded();
+  await namedCard.locator('[data-wsf-control="bar"]:not([data-wsf-status])').waitFor();
+  assert.match(await namedCard.innerText(),/建议折叠：通用规则：涉及董宝珍/);
+  assert.equal(await namedCard.getAttribute('data-wsf-state'),null);
+  await options.selectOption('#mode','active');await options.click('button[type="submit"]');
+  await page.waitForFunction(()=>document.querySelector('article:last-of-type').getAttribute('data-wsf-state')==='collapsed');
+  assert.equal(await namedCard.locator('.retweet').isVisible(),false);
+  await namedCard.locator('.wbpro-feed-reText a[usercard]').evaluate(el=>{el.textContent='普通作者';});
+  await page.waitForFunction(()=>!document.querySelector('article:last-of-type').hasAttribute('data-wsf-state')&&document.querySelector('article:last-of-type [data-wsf-control="bar"]:not([data-wsf-status])')?.textContent.includes('语义服务未配置'));
+  log.push('Visible repost author overrides truncated-context protection in Shadow and Active; author changes trigger re-evaluation.');
+  // Isolated profile + deterministic provider fixture: exercise the real DOM ->
+  // content script -> worker -> request/response -> renderer path without a key.
+  await worker.evaluate(()=>{
+    globalThis.__ruleRequests=[];
+    chrome.permissions.contains=async()=>true;
+    globalThis.fetch=async(_url,init)=>{
+      const request=JSON.parse(init.body);globalThis.__ruleRequests.push(request);
+      const text=request.state.authorText+' '+request.state.repostText;
+      const scores={sports_content:/游泳接力决赛夺冠/.test(text)?.99:.05,life_philosophy:.97,poetry_or_sentiment:.1,concrete_business_economic_information:.05,investment_philosophy:.05,noise_evidence_sufficient:/人生如旅行/.test(text)?.99:.5};
+      return new Response(JSON.stringify({model:'browser-fixture',answers:Object.fromEntries(Object.keys(request.questions).map(k=>[k,{type:'noul',noul:scores[k]??.5}]))}));
+    };
+  });
+  const saveFixtureMode=async mode=>{
+    const saved=await options.evaluate(async mode=>{const current=await chrome.runtime.sendMessage({type:'getSettings'});return chrome.runtime.sendMessage({type:'saveSettings',settings:{...current.data.settings,mode,semanticEnabled:true},apiKey:'browser-test-only'});},mode);
+    assert.equal(saved.ok,true,saved.error);
+  };
+  await saveFixtureMode('shadow');
+  const swim=card('2635695961','SwimPartial','牛').replace('</article>','<div class="retweet"><div class="wbpro-feed-reText"><div><a usercard="1234567890" href="/u/1234567890">阿森纳著名教授</a></div><div class="_wbtext_fixture_1">#中国队男子4x100米混接夺金# 中国队游泳接力决赛夺冠，3分27秒89！<span class="expand">展开</span></div></div></div></article>');
+  await page.evaluate(html=>document.body.insertAdjacentHTML('beforeend',html),swim);
+  const swimCard=page.locator('article').last();await swimCard.scrollIntoViewIfNeeded();
+  await swimCard.locator('[data-wsf-control="bar"]:not([data-wsf-status])').waitFor();
+  assert.match(await swimCard.innerText(),/建议折叠：通用规则：体育相关内容/);
+  assert.equal(await swimCard.getAttribute('data-wsf-state'),null);
+  const swimRequest=await worker.evaluate(()=>globalThis.__ruleRequests.find(r=>r.state.repostText.includes('游泳接力决赛夺冠')));
+  assert.equal(swimRequest.state.evidence.isTextTruncated,true);assert.equal(swimRequest.state.authorText,'牛');
+  await saveFixtureMode('active');
+  await page.waitForFunction(()=>document.querySelector('article:last-of-type').getAttribute('data-wsf-state')==='collapsed');
+  assert.equal(await swimCard.locator('.retweet').isVisible(),false);
+  await swimCard.locator('.retweet ._wbtext_fixture_1').evaluate(el=>{el.innerHTML='今天比赛……<span class="expand">展开</span>';});
+  await page.waitForFunction(()=>!document.querySelector('article:last-of-type').hasAttribute('data-wsf-state')&&document.querySelector('article:last-of-type [data-wsf-control="bar"]:not([data-wsf-status])')?.textContent.includes('证据不足'));
+  log.push('Truncated swimming repost reaches the semantic service, suggests in Shadow, folds in Active, and retains only when evidence is uncertain.');
+  await page.evaluate(html=>document.body.insertAdjacentHTML('beforeend',html),card('2820792015','WangPartial','人生如旅行，风雨都是风景。<span class="expand">展开</span>'));
+  const wangPartial=page.locator('article').last();await wangPartial.scrollIntoViewIfNeeded();
+  await page.waitForFunction(()=>document.querySelector('article:last-of-type').getAttribute('data-wsf-state')==='collapsed');
+  assert.match(await wangPartial.innerText(),/人生哲理/);
+  await wangPartial.locator('._wbtext_fixture_1').evaluate(el=>{el.innerHTML='人生……<span class="expand">展开</span>';});
+  await page.waitForFunction(()=>!document.querySelector('article:last-of-type').hasAttribute('data-wsf-state')&&document.querySelector('article:last-of-type [data-wsf-control="bar"]:not([data-wsf-status])')?.textContent.includes('哲理／诗词规则证据不足'));
+  log.push('Account rules also evaluate truncated posts; an unsupported conclusion restores the card instead of assuming missing information is absent.');
   assert.deepEqual(errors,[]);
-  await writeFile('artifacts/browser-test-report.json',JSON.stringify({date:new Date().toISOString(),browser:context.browser()?.version(),checks:log,modelCalls:stats.calls,errors},null,2));
+  const simulatedModelCalls=await worker.evaluate(()=>globalThis.__ruleRequests.length);
+  await writeFile('artifacts/browser-test-report.json',JSON.stringify({date:new Date().toISOString(),browser:context.browser()?.version(),checks:log,realModelCalls:0,simulatedModelCalls,errors},null,2));
   console.log(JSON.stringify({passed:log.length,checks:log,errors}));
 }finally{await context.close();await rm(profile,{recursive:true,force:true});}

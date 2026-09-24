@@ -4,8 +4,8 @@ export const ACCOUNTS = [
   { id: '2173738960', name: '韩广斌', policy: 'retain' },
   { id: '2635695961', name: '老曾阿牛', policy: 'retain' },
 ] as const;
-export const POLICY_VERSION = 'weibo-global-v4';
-export const SCHEMA_VERSION = 'noul-zh-v2';
+export const POLICY_VERSION = 'weibo-global-v6';
+export const SCHEMA_VERSION = 'noul-zh-v3';
 export const DEFAULT_THRESHOLDS = {
   danCollapseSocial: .92, danCollapseInformation: .20, danDimSocial: .75, danDimInformation: .40,
   wangCollapseNoise: .90, wangCollapseInformation: .25, wangDimNoise: .75, wangDimInformation: .40, investmentProtection: .50,

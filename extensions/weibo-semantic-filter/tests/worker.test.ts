@@ -4,7 +4,7 @@ test('worker enforces sender boundary, protects key, bypasses whitelist, caches 
   let listener:any;let access='';const local:Record<string,unknown>={},session:Record<string,unknown>={};let calls=0;let resolveSlow:(r:Response)=>void=()=>{};let slow=false;
   const area=(data:Record<string,unknown>)=>({get:async(keys:string[])=>Object.fromEntries(keys.map(k=>[k,data[k]])),set:async(value:object)=>Object.assign(data,value),setAccessLevel:async({accessLevel}:{accessLevel:string})=>{access=accessLevel;}});
   Object.assign(globalThis,{chrome:{runtime:{id:'test-extension',getURL:(p:string)=>'chrome-extension://test-extension/'+p,onMessage:{addListener:(fn:any)=>{listener=fn;}}},storage:{local:area(local),session:area(session)},permissions:{contains:async()=>true},tabs:{query:async()=>[],sendMessage:async()=>{}}}});
-  const good={model:'jev-test',answers:{life_philosophy:{type:'noul',noul:.95},poetry_or_sentiment:{type:'noul',noul:.1},concrete_business_economic_information:{type:'noul',noul:.1},investment_philosophy:{type:'noul',noul:.1}}};
+  const good={model:'jev-test',answers:{noise_evidence_sufficient:{type:'noul',noul:.99},life_philosophy:{type:'noul',noul:.95},poetry_or_sentiment:{type:'noul',noul:.1},concrete_business_economic_information:{type:'noul',noul:.1},investment_philosophy:{type:'noul',noul:.1}}};
   const originalFetch=globalThis.fetch;globalThis.fetch=async()=>{calls++;if(slow)return new Promise(r=>{resolveSlow=r;});return new Response(JSON.stringify(good));};
   await import('../src/background/service-worker');
   const ui={id:'test-extension',url:'chrome-extension://test-extension/options.html'};

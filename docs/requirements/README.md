@@ -8,7 +8,7 @@
 
 ## 微博语义过滤 Chrome 扩展
 
-- [PRD v0.2 与用户已确认补充](PRD_Weibo_Semantic_Filter_Chrome_Extension_MVP_v0.2.md)：对应 0.3.2；包含四账号体育、纯图片、林园/董宝珍过滤及即时手动纠错。
+- [PRD v0.2 与用户已确认补充](PRD_Weibo_Semantic_Filter_Chrome_Extension_MVP_v0.2.md)：对应 0.3.5；包含四账号体育、纯图片、林园/董宝珍过滤及即时手动纠错。
 - [当前架构](../architecture/weibo-semantic-filter-mvp.md)：真实模块、规则优先级、数据边界和验证限制。
 - [使用指南](../guides/weibo-extension.md)：安装更新、Vercel key、图片识别、Shadow / Active 与反馈改进流程。
 
