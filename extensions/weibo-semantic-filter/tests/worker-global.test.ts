@@ -7,7 +7,7 @@ test('worker evaluates every rule before retention, preserves independent matche
   let listener:any;const local:Record<string,unknown>={},session:Record<string,unknown>={};
   const area=(data:Record<string,unknown>)=>({get:async(keys:string[])=>Object.fromEntries(keys.map(k=>[k,data[k]])),set:async(value:object)=>Object.assign(data,value),setAccessLevel:async()=>{}});
   Object.assign(globalThis,{chrome:{runtime:{id:'global-test',getURL:(p:string)=>'chrome-extension://global-test/'+p,onMessage:{addListener:(fn:any)=>{listener=fn;}}},storage:{local:area(local),session:area(session)},permissions:{contains:async()=>true},tabs:{query:async()=>[],sendMessage:async()=>{}}}});
-  const originalFetch=globalThis.fetch;let textCalls=0,visionCalls=0,sports=.99,substantive=.05,badVision=false,visualSports=true,accountNoise=.1;const requests:any[]=[];let visualFields:object|undefined,visionFailures=0;
+  const originalFetch=globalThis.fetch;let textCalls=0,visionCalls=0,sports=.99,substantive=.05,badVision=false,visualSports=true,accountNoise=.1;const requests:any[]=[];let visualFields:object|undefined,visionFailures=0;let omittedTextKeys:string[]=[];
   globalThis.fetch=async(url,init)=>{
     const body=JSON.parse(init!.body as string);requests.push(body);
     assert.equal(new Headers(init!.headers).get('authorization'),'Bearer test-only');
@@ -16,7 +16,7 @@ test('worker evaluates every rule before retention, preserves independent matche
       return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:badVision?'invalid':JSON.stringify(visualFields??{allImagesUnderstood:true,sports:visualSports,sceneryOnly:false,sceneryTextSupported:false,hasSubstantiveInformation:false,confidence:.99})}}]}));
     }
     textCalls++;
-    return new Response(JSON.stringify({model:'jev',answers:Object.fromEntries(['sports_content','substantive_text','life_philosophy','poetry_or_sentiment','concrete_business_economic_information','investment_philosophy','noise_evidence_sufficient'].map(k=>[k,{type:'noul',noul:k==='sports_content'?sports:k==='substantive_text'?substantive:k==='life_philosophy'?accountNoise:k==='noise_evidence_sufficient'?.99:.1}]))}));
+    return new Response(JSON.stringify({model:'jev',answers:Object.fromEntries(['sports_content','substantive_text','life_philosophy','poetry_or_sentiment','concrete_business_economic_information','investment_philosophy','noise_evidence_sufficient'].filter(k=>!omittedTextKeys.includes(k)).map(k=>[k,{type:'noul',noul:k==='sports_content'?sports:k==='substantive_text'?substantive:k==='life_philosophy'?accountNoise:k==='noise_evidence_sufficient'?.99:.1}]))}));
   };
   await import('../src/background/service-worker');
   const ui={id:'global-test',url:'chrome-extension://global-test/options.html'},page={id:'global-test',url:'https://weibo.com/',frameId:0,tab:{id:1}};
@@ -75,5 +75,22 @@ test('worker evaluates every rule before retention, preserves independent matche
     visualFields={sports:true,confidence:.99};
     assert.equal((await decide(photo)).state,'collapsed');
     assert.equal((await decide(photo)).cached,true);assert.equal(visionCalls,missingBefore+3);
+    // Complete visual evidence can resolve missing sports/scenery prechecks,
+    // but can never substitute for unanswered account-specific questions.
+    visualFields={sports:false,sceneryOnly:false,sceneryTextSupported:true,allImagesUnderstood:true,hasSubstantiveInformation:false,confidence:.99};
+    omittedTextKeys=['sports_content','substantive_text'];
+    for(const noise of [.8,.1]){
+      accountNoise=noise;
+      const combined={...wang,text:`完整合并判断 ${noise}`},expected=noise===.8?'dimmed':'visible';
+      const before:[number,number]=[textCalls,visionCalls];
+      assert.equal((await decide(combined)).state,expected);
+      const cached=await decide(combined);assert.equal(cached.state,expected);assert.equal(cached.cached,true);
+      assert.deepEqual([textCalls,visionCalls],[before[0]+1,before[1]+1]);
+    }
+    omittedTextKeys=['noise_evidence_sufficient'];
+    const unknownAccount={...wang,text:'图片不能补足账号字段'};
+    const unknownBefore:[number,number]=[textCalls,visionCalls];
+    for(let i=0;i<2;i++){const d=await decide(unknownAccount);assert.equal(d.state,'visible');assert.notEqual(d.cached,true);}
+    assert.deepEqual([textCalls,visionCalls],[unknownBefore[0]+2,unknownBefore[1]+2]);
   }finally{globalThis.fetch=originalFetch;}
 });

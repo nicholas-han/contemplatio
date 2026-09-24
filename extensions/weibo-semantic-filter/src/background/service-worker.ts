@@ -1,6 +1,6 @@
 import {DEFAULT_SETTINGS,validateSettings,type Settings,POLICY_VERSION,SCHEMA_VERSION} from '../shared/settings';
 import {validPost} from '../shared/messages';
-import type {Decision,WeiboPost} from '../shared/types';
+import type {Decision,DecisionKey,WeiboPost} from '../shared/types';
 import {localDecision,policyDecision,requiredDecisions,needsVision} from '../policy/decision-engine';
 import {JevProvider,ProviderError,type ClassifierResult} from '../classifier/jev-provider';
 import {VisionProvider,visualDecision,visualResultComplete} from '../classifier/vision-provider';
@@ -52,6 +52,7 @@ async function classify(post:WeiboPost,s:Settings,signal:AbortSignal):Promise<De
         if(signal.aborted)return unavailable('设置已变化');
         let decision={...policyDecision(post,s,result.scores),model:result.model,latencyMs:result.latencyMs};
         let visualComplete=true;
+        const visuallyResolved=new Set<DecisionKey>();
         if(decision.state!=='visible')supportedDecision=decision;
         if(decision.state!=='collapsed'&&needsVision(post,s,result.scores)){
           if(new URL(s.endpoint).origin!=='https://ai-gateway.vercel.sh')return unavailable('图片识别需要 Vercel 连接');
@@ -60,12 +61,19 @@ async function classify(post:WeiboPost,s:Settings,signal:AbortSignal):Promise<De
           if(signal.aborted)return unavailable('设置已变化');
           const filtered=visualDecision(visual.result,s,post,result.scores);
           visualComplete=visualResultComplete(visual.result,s);
+          // The visual request includes the same visible text and can settle
+          // sports/scenery even if their text precheck fields were omitted.
+          // It does not answer the account-specific interaction/noise fields.
+          if(visualComplete&&visual.result.confidence>=.95){
+            if(s.globalRules.sports)visuallyResolved.add('sports_content');
+            if(s.globalRules.sceneryPhotos)visuallyResolved.add('substantive_text');
+          }
           decision=filtered?{...filtered,model:visual.model,latencyMs:result.latencyMs+visual.latencyMs}:decision;
           stats.inputTokens+=visual.inputTokens;stats.outputTokens+=visual.outputTokens;
         }
         breaker={failures:0,until:breaker.until>Date.now()?breaker.until:0};stats.lastError='';
         // Do not cache a fallback caused by a malformed/missing rule answer.
-        if(decision.state==='collapsed'||visualComplete&&decisions.every(k=>result.scores[k]!==undefined))await putCached(id,decision).catch(()=>{});
+        if(decision.state==='collapsed'||visualComplete&&decisions.every(k=>result.scores[k]!==undefined||visuallyResolved.has(k)))await putCached(id,decision).catch(()=>{});
         await persistStats();return decision;
       }catch(e){
         const error=e instanceof ProviderError?e:new ProviderError('network');
