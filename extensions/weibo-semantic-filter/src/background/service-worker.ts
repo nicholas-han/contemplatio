@@ -1,9 +1,9 @@
 import {DEFAULT_SETTINGS,validateSettings,type Settings,POLICY_VERSION,SCHEMA_VERSION} from '../shared/settings';
 import {validPost} from '../shared/messages';
-import type {Decision,WeiboPost} from '../shared/types';
+import type {Decision,DecisionKey,WeiboPost} from '../shared/types';
 import {localDecision,policyDecision,requiredDecisions,needsVision} from '../policy/decision-engine';
-import {JevProvider,ProviderError} from '../classifier/jev-provider';
-import {VisionProvider,visualDecision} from '../classifier/vision-provider';
+import {JevProvider,ProviderError,type ClassifierResult} from '../classifier/jev-provider';
+import {VisionProvider,visualDecision,visualResultComplete} from '../classifier/vision-provider';
 import {RequestQueue} from './request-queue';
 import {CLASSIFY_ATTEMPTS,RETRY_DELAY_MS} from '../shared/request-budget';
 import {cacheKey,getCached,putCached,recordFeedback,clearCache,clearFeedback,exportFeedback,policyStamp} from '../storage/local';
@@ -34,27 +34,47 @@ async function classify(post:WeiboPost,s:Settings,signal:AbortSignal):Promise<De
   const task=queue.run(async()=>{
     if(signal.aborted) return unavailable('设置已变化');
     const provider=new JevProvider(s.endpoint,apiKey,s.model,s.timeoutMs);
+    let supportedDecision:Decision|undefined;
+    let textResult:ClassifierResult|undefined;
+    const decisions=requiredDecisions(post,s);
     for(let attempt=0;attempt<CLASSIFY_ATTEMPTS;attempt++){
       if(signal.aborted)return unavailable('设置已变化');
-      if(Date.now()<breaker.until)return unavailable('语义服务冷却中');
+      if(Date.now()<breaker.until)return supportedDecision??unavailable('语义服务冷却中');
       try{
-        const decisions=requiredDecisions(post,s);
-        const hasText=!!(post.text+post.repostText).trim();
-        if(hasText)stats.calls++;
-        const result=hasText?await provider.classify({...post,decisions},signal):{scores:{sports_content:0,substantive_text:0},model:'local-empty-text',latencyMs:0,inputTokens:0,outputTokens:0};
+        // A successful text result survives visual retries. Only the failed
+        // stage is retried, so missing/different later text cannot undo it.
+        if(!textResult){
+          if(decisions.length)stats.calls++;
+          textResult=decisions.length?await provider.classify({...post,decisions},signal):{scores:{sports_content:0,substantive_text:0},model:'local-empty-text',latencyMs:0,inputTokens:0,outputTokens:0};
+          stats.inputTokens+=textResult.inputTokens??0;stats.outputTokens+=textResult.outputTokens??0;
+        }
+        const result=textResult;
         if(signal.aborted)return unavailable('设置已变化');
         let decision={...policyDecision(post,s,result.scores),model:result.model,latencyMs:result.latencyMs};
-        if(needsVision(post,s,result.scores)){
+        let visualComplete=true;
+        const visuallyResolved=new Set<DecisionKey>();
+        if(decision.state!=='visible')supportedDecision=decision;
+        if(decision.state!=='collapsed'&&needsVision(post,s,result.scores)){
           if(new URL(s.endpoint).origin!=='https://ai-gateway.vercel.sh')return unavailable('图片识别需要 Vercel 连接');
           stats.calls++;
           const visual=await new VisionProvider(apiKey).classify(post,signal);
           if(signal.aborted)return unavailable('设置已变化');
-          const filtered=visualDecision(visual.result,s);
-          decision={...(filtered??{state:'visible' as const,source:'protected' as const,reason:visual.result.allImagesUnderstood?'图片未命中体育或纯风景规则':'图片无法完整识别，保留'}),model:visual.model,latencyMs:result.latencyMs+visual.latencyMs};
+          const filtered=visualDecision(visual.result,s,post,result.scores);
+          visualComplete=visualResultComplete(visual.result,s);
+          // The visual request includes the same visible text and can settle
+          // sports/scenery even if their text precheck fields were omitted.
+          // It does not answer the account-specific interaction/noise fields.
+          if(visualComplete&&visual.result.confidence>=.95){
+            if(s.globalRules.sports)visuallyResolved.add('sports_content');
+            if(s.globalRules.sceneryPhotos)visuallyResolved.add('substantive_text');
+          }
+          decision=filtered?{...filtered,model:visual.model,latencyMs:result.latencyMs+visual.latencyMs}:decision;
           stats.inputTokens+=visual.inputTokens;stats.outputTokens+=visual.outputTokens;
         }
-        breaker={failures:0,until:breaker.until>Date.now()?breaker.until:0};stats.lastError='';stats.inputTokens+=result.inputTokens??0;stats.outputTokens+=result.outputTokens??0;
-        await putCached(id,decision).catch(()=>{});await persistStats();return decision;
+        breaker={failures:0,until:breaker.until>Date.now()?breaker.until:0};stats.lastError='';
+        // Do not cache a fallback caused by a malformed/missing rule answer.
+        if(decision.state==='collapsed'||visualComplete&&decisions.every(k=>result.scores[k]!==undefined||visuallyResolved.has(k)))await putCached(id,decision).catch(()=>{});
+        await persistStats();return decision;
       }catch(e){
         const error=e instanceof ProviderError?e:new ProviderError('network');
         if(error.code==='cancelled')return unavailable('设置已变化');
@@ -63,10 +83,10 @@ async function classify(post:WeiboPost,s:Settings,signal:AbortSignal):Promise<De
         breaker.failures++;
         if(error.code==='rate_limit')breaker.until=Math.max(breaker.until,Date.now()+error.retryAfterMs);
         else if(error.code==='auth'||breaker.failures>=3)breaker.until=Math.max(breaker.until,Date.now()+60000);
-        await persistStats();return unavailable(`语义服务暂时不可用（${error.code}）`);
+        await persistStats();return supportedDecision??unavailable(`语义服务暂时不可用（${error.code}）`);
       }
     }
-    return unavailable('语义服务暂时不可用');
+    return supportedDecision??unavailable('语义服务暂时不可用');
   }).catch(()=>unavailable('请求队列繁忙，保留内容')).finally(()=>{if(inflight.get(id)===task)inflight.delete(id);});
   inflight.set(id,task);return task;
 }

@@ -9,7 +9,7 @@
 
 公司研究系统是面向 DeepSeek Harness / Cordis 的本地公司档案工具，提供 SQLite、证据与来源、行业指标包、历史估计、管理层与股本记录、估值模型和本地工作台。现行架构为 v0.1。
 
-微博功能当前交付为 **0.3.3 Chrome 插件**，支持四账号通用过滤、账号策略、Shadow / Active 和本地纠错。旧抓取服务、独立阅读器与定时任务已退役，见[清理记录](docs/migrations/weibo-pilot/retirement-2026-09-21.md)。
+微博功能当前交付为 **0.3.5 Chrome 插件**，支持四账号通用过滤、账号策略、Shadow / Active 和本地纠错。旧抓取服务、独立阅读器与定时任务已退役，见[清理记录](docs/migrations/weibo-pilot/retirement-2026-09-21.md)。
 
 ## 开发
 

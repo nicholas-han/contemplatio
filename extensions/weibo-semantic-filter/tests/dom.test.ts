@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { extractPost, supportedPage } from '../src/content/weibo-dom-adapter';
 import { render, restore, installStyle } from '../src/content/renderer';
+import {localDecision} from '../src/policy/decision-engine';
+import {DEFAULT_SETTINGS} from '../src/shared/settings';
 
 test('supported routes exclude details, searches and foreign origins', () => {
   for (const url of ['https://weibo.com/','https://weibo.com/u/1249424622','https://weibo.com/1249424622']) assert.equal(supportedPage(url),true);
@@ -67,4 +69,24 @@ test('retention banners remain visible with debug disabled',()=>{
 test('photo cards with unfamiliar nonempty body text are not treated as pure photos',()=>{
   const dom=new JSDOM('<article><header><a href="/u/2173738960">作者</a><a href="/2173738960/Photo2">今天</a></header><div class="wbpro-feed-content"><div class="new-text">公司发布重要经营数据</div><div class="picture"><img src="https://wx1.sinaimg.cn/large/a.jpg"></div></div></article>',{url:'https://weibo.com/'});
   assert.equal(extractPost(dom.window.document.querySelector('article')!),null);dom.window.close();
+});
+test('visible repost author triggers named-person rule before incomplete-context protection',()=>{
+  const fixture=JSON.parse(readFileSync(new URL('./fixtures/desktop-2026-09-21.json',import.meta.url),'utf8')).find((f:any)=>f.expected.postType==='repost');
+  for(const name of ['@否极泰董宝珍','@否極泰董寶珍','@林园投资','@林園投资']){
+    const dom=new JSDOM(fixture.html.replaceAll('1000000000','2820792015'),{url:'https://weibo.com/'});
+    const card=dom.window.document.querySelector('article')!,author=card.querySelector('.wbpro-feed-reText a[usercard]')!;
+    author.textContent=name;
+    const post=extractPost(card)!;assert.ok(post);assert.equal(post.visibleContext,`转发作者：${name}`);
+    assert.equal(post.isTextTruncated,true);assert.doesNotMatch(post.text+post.repostText,/董[宝寶]珍|林[园園]/);
+    assert.equal(localDecision(post,DEFAULT_SETTINGS)?.state,'collapsed');
+    assert.match(localDecision(post,DEFAULT_SETTINGS)!.reason,/涉及(?:林园|董宝珍)/);
+    // Missing repost body still provides reliable visible author evidence.
+    card.querySelector('.wbpro-feed-reText [class*="_wbtext_"]')!.remove();
+    const partial=extractPost(card)!;assert.ok(partial);assert.equal(partial.contextCompleteness,'unknown');
+    assert.equal(localDecision(partial,DEFAULT_SETTINGS)?.state,'collapsed');
+    author.textContent='普通作者';const changed=extractPost(card)!;
+    assert.notEqual(changed.elementFingerprint,partial.elementFingerprint);
+    assert.equal(localDecision(changed,DEFAULT_SETTINGS),null);
+    dom.window.close();
+  }
 });

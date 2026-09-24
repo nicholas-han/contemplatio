@@ -11,15 +11,16 @@ test('retain-all, unknown and disabled accounts override every noise signal',()=
   }
   assert.equal(localDecision(post(),{...s,accounts:{...s.accounts,'2820792015':false}})!.state,'visible');
 });
-test('acknowledgements only collapse reliable text-only replies, not originals, images, reposts or numbers',()=>{
+test('only proven plain acknowledgements collapse locally; uncertain replies proceed to semantic rules',()=>{
   const reply=post({authorId:'1249424622',postType:'reply',text:'回复 @样本：谢谢！'});
   assert.equal(localDecision(reply,s)?.state,'collapsed');
-  for(const patch of [{postType:'original' as const},{hasMedia:true},{hasLinkCard:true},{repostText:'季度利润增长'},{isTextTruncated:true},{contextCompleteness:'unknown' as const},{text:''}])assert.equal(localDecision({...reply,...patch},s)?.state,'visible');
+  for(const patch of [{postType:'original' as const},{text:''}])assert.equal(localDecision({...reply,...patch},s)?.state,'visible');
+  for(const patch of [{hasMedia:true},{hasLinkCard:true},{repostText:'季度利润增长'},{isTextTruncated:true},{contextCompleteness:'unknown' as const}])assert.equal(localDecision({...reply,...patch},s),null);
   for(const text of ['1','2026','利率下调','谢谢，公司盈利增长','股票涨了10%'])assert.notEqual(localDecision({...reply,text},s)?.state,'collapsed');
   for(const text of ['👍','🙏🙏','谢谢。','!!!'])assert.equal(localDecision({...reply,text},s)?.state,'collapsed');
 });
 test('Wang noise thresholds preserve substantive information and investment philosophy, including DIM',()=>{
-  const scores={life_philosophy:.9,poetry_or_sentiment:.2,concrete_business_economic_information:.25,investment_philosophy:.1};
+  const scores={life_philosophy:.9,poetry_or_sentiment:.2,concrete_business_economic_information:.25,investment_philosophy:.1,noise_evidence_sufficient:.99};
   assert.equal(policyDecision(post(),s,scores).state,'collapsed');
   assert.equal(policyDecision(post(),s,{...scores,life_philosophy:.89}).state,'dimmed');
   assert.equal(policyDecision(post(),s,{...scores,life_philosophy:.74}).state,'visible');
@@ -30,9 +31,9 @@ test('Wang noise thresholds preserve substantive information and investment phil
 });
 test('Dan model decisions require high interaction and low new information together',()=>{
   const p=post({authorId:'1249424622',postType:'reply',text:'回复 @某人：正是如此呀'});
-  assert.equal(policyDecision(p,s,{social_interaction:.92,new_substantive_information:.20}).state,'collapsed');
-  assert.equal(policyDecision(p,s,{social_interaction:.91,new_substantive_information:.20}).state,'dimmed');
-  assert.equal(policyDecision(p,s,{social_interaction:.99,new_substantive_information:.41}).state,'visible');
+  assert.equal(policyDecision(p,s,{social_interaction:.92,new_substantive_information:.20,interaction_evidence_sufficient:.99}).state,'collapsed');
+  assert.equal(policyDecision(p,s,{social_interaction:.91,new_substantive_information:.20,interaction_evidence_sufficient:.99}).state,'dimmed');
+  assert.equal(policyDecision(p,s,{social_interaction:.99,new_substantive_information:.41,interaction_evidence_sufficient:.99}).state,'visible');
 });
 test('settings reject invalid values and reversed conservative thresholds',()=>{
   assert.deepEqual(validateSettings(s),s);
@@ -43,22 +44,24 @@ test('shared sports rule covers all four accounts, including media and retained 
   for(const authorId of Object.keys(s.accounts)){
     const p=post({authorId,text:'今天打高尔夫，明天看篮球和足球比赛',hasMedia:true});
     assert.equal(localDecision(p,s),null);
-    assert.deepEqual(requiredDecisions(p,s),['sports_content']);
+    assert.ok(requiredDecisions(p,s).includes('sports_content'));
     assert.equal(policyDecision(p,s,{sports_content:.99}).state,'collapsed');
     assert.equal(policyDecision(p,s,{sports_content:.1}).state,'visible');
     assert.equal(policyDecision(p,s,{}).state,'visible');
   }
   assert.equal(localDecision(post({authorId:'999999999',text:'足球'}),s)?.state,'collapsed');
-  assert.equal(policyDecision(post({text:'足球',isTextTruncated:true}),s,{sports_content:1}).state,'visible');
+  assert.equal(policyDecision(post({text:'足球',isTextTruncated:true}),s,{sports_content:1}).state,'collapsed');
   assert.equal(policyDecision(post({text:'公司市场份额增长',hasMedia:true}),s,{sports_content:.02}).state,'visible');
 });
-test('photo classification requires consent, complete images and low-information text',()=>{
+test('photo rules require consent; substantive text and incomplete context cannot veto sports',()=>{
   const s={...structuredClone(DEFAULT_SETTINGS),visionEnabled:true};
   const p=post({text:'早上好',hasMedia:true,imageUrls:['https://wx1.sinaimg.cn/large/a.jpg'],imagesComplete:true,hasVideo:false});
   assert.equal(needsVision(p,s,{sports_content:.1,substantive_text:.1}),true);
   for(const patch of [{visionEnabled:false},{globalRules:{sports:false,sceneryPhotos:false,namedPeople:false}}])assert.equal(needsVision(p,{...s,...patch},{sports_content:0,substantive_text:0}),false);
-  for(const patch of [{imagesComplete:false},{hasVideo:true},{hasLinkCard:true},{imageUrls:Array(10).fill('https://wx1.sinaimg.cn/large/a.jpg')}])assert.equal(needsVision({...p,...patch},s,{substantive_text:0}),false);
-  assert.equal(needsVision(p,s,{substantive_text:.9}),false);
+  for(const patch of [{imagesComplete:false},{hasVideo:true},{hasLinkCard:true},{isTextTruncated:true},{contextCompleteness:'unknown' as const}])assert.equal(needsVision({...p,...patch},s,{substantive_text:0}),true);
+  assert.equal(needsVision({...p,imageUrls:Array(10).fill('https://wx1.sinaimg.cn/large/a.jpg')},s,{}),false);
+  assert.equal(needsVision(p,s,{substantive_text:.9}),true);
+  assert.equal(needsVision(p,{...s,globalRules:{...s.globalRules,sports:false}},{substantive_text:.9}),false);
 });
 test('old settings migrate without enabling image transmission',()=>{
   const {globalRules,visionEnabled,...old}=DEFAULT_SETTINGS;
@@ -69,7 +72,7 @@ test('old settings migrate without enabling image transmission',()=>{
 test('named-person rule overrides media and investment protection across four accounts, but respects scope and switches',()=>{
   const settings=structuredClone(DEFAULT_SETTINGS);
   for(const authorId of Object.keys(settings.accounts)){
-    for(const patch of [{text:'林园谈价值投资',hasMedia:true},{text:'转发微博',repostText:'董宝珍谈巴菲特',postType:'repost' as const},{text:'林園与董寶珍',isTextTruncated:true,contextCompleteness:'unknown' as const}]){
+    for(const patch of [{text:'林园谈价值投资',hasMedia:true},{text:'转发微博',repostText:'董宝珍谈巴菲特',postType:'repost' as const},{text:'林園与董寶珍',isTextTruncated:true,contextCompleteness:'unknown' as const},...['@否极泰董宝珍','@林園投资'].map(name=>({text:'',repostText:'公司经营数据',visibleContext:`转发作者：${name}`,postType:'repost' as const,hasMedia:true,isTextTruncated:true,contextCompleteness:'unknown' as const}))]){
       const d=policyDecision(post({authorId,...patch}),settings,{});
       assert.equal(d.state,'collapsed');assert.equal(d.source,'local');assert.match(d.reason,/涉及(?:林园|董宝珍)/);
     }
@@ -78,6 +81,7 @@ test('named-person rule overrides media and investment protection across four ac
   for(const changed of [{...settings,enabled:false},{...settings,accounts:{...settings.accounts,[p.authorId]:false}},{...settings,globalRules:{sports:false,sceneryPhotos:false,namedPeople:false}}])assert.equal(localDecision(p,changed)?.state,'visible');
   assert.equal(localDecision({...p,authorId:'999999999'},settings)?.state,'collapsed');
   assert.notEqual(localDecision({...p,text:'园林景观与公园漫步'},settings)?.state,'collapsed');
+  assert.equal(localDecision({...p,text:'',visibleContext:'转发作者：@否极泰董宝珍',contextCompleteness:'unknown'}, {...settings,globalRules:{...settings.globalRules,namedPeople:false}})?.reason,'现有证据不足以过滤');
   assert.equal(validateSettings({...settings,globalRules:{sports:false,sceneryPhotos:true}}).globalRules.namedPeople,true);
   assert.equal(validateSettings({...settings,globalRules:{...settings.globalRules,namedPeople:false}}).globalRules.namedPeople,false);
 });
@@ -98,4 +102,38 @@ test('non-target accounts fold without AI or complete text, while target members
   assert.equal(validateSettings(old).collapseOtherAccounts,true);
   assert.equal(validateSettings({...settings,collapseOtherAccounts:false}).collapseOtherAccounts,false);
   assert.throws(()=>validateSettings({...settings,collapseOtherAccounts:'false'}));
+});
+test('every semantic rule evaluates partial evidence; only unsupported rule conclusions retain',()=>{
+  const settings=structuredClone(DEFAULT_SETTINGS);
+  const variants=[{}, {isTextTruncated:true}, {contextCompleteness:'unknown' as const}, {hasMedia:true}, {hasLinkCard:true}, {text:'',repostText:'人生是一场远行',postType:'repost' as const}];
+  for(const variant of variants){
+    const wang=post(variant);
+    const scores={sports_content:.1,life_philosophy:.96,poetry_or_sentiment:.1,concrete_business_economic_information:.05,investment_philosophy:.05,noise_evidence_sufficient:.99};
+    assert.equal(localDecision(wang,settings),null);
+    assert.equal(policyDecision(wang,settings,scores).state,'collapsed');
+    assert.equal(policyDecision(wang,settings,{...scores,life_philosophy:.8}).state,'dimmed');
+    for(const evidence of [undefined,.5,NaN])assert.equal(policyDecision(wang,settings,{...scores,noise_evidence_sufficient:evidence}).state,'visible');
+    assert.equal(policyDecision(wang,settings,{...scores,concrete_business_economic_information:.95}).state,'visible');
+    assert.equal(policyDecision(wang,settings,{...scores,investment_philosophy:.95}).state,'visible');
+    assert.equal(policyDecision(wang,settings,{...scores,poetry_or_sentiment:undefined}).state,'collapsed');
+    assert.equal(policyDecision(wang,settings,{...scores,life_philosophy:undefined,poetry_or_sentiment:.99}).state,'collapsed');
+    // A valid sports result does not depend on the account's unavailable fields.
+    assert.equal(policyDecision(wang,settings,{sports_content:.99,noise_evidence_sufficient:.5}).state,'collapsed');
+    const dan=post({...variant,authorId:'1249424622',postType:'reply',text:'回复 @某人：说得对呀'});
+    const interaction={sports_content:.1,social_interaction:.99,new_substantive_information:.05,interaction_evidence_sufficient:.99};
+    assert.equal(localDecision(dan,settings),null);
+    assert.equal(policyDecision(dan,settings,interaction).state,'collapsed');
+    assert.equal(policyDecision(dan,settings,{...interaction,social_interaction:.8}).state,'dimmed');
+    assert.equal(policyDecision(dan,settings,{...interaction,interaction_evidence_sufficient:.5}).state,'visible');
+    assert.equal(policyDecision(dan,settings,{...interaction,new_substantive_information:.9}).state,'visible');
+  }
+  const swim=post({authorId:'2635695961',text:'牛',repostText:'#中国队男子4x100米混接夺金# 中国队游泳接力决赛夺冠，3分27秒89！',postType:'repost',isTextTruncated:true});
+  for(const authorId of Object.keys(settings.accounts)){
+    assert.equal(localDecision({...swim,authorId},settings),null);
+    assert.match(policyDecision({...swim,authorId},settings,{sports_content:.99}).reason,/体育/);
+    assert.equal(policyDecision({...swim,authorId},settings,{sports_content:.5}).state,'visible');
+    assert.equal(policyDecision({...swim,authorId},settings,{}).state,'visible');
+    assert.equal(policyDecision({...swim,authorId},{...settings,accounts:{...settings.accounts,[authorId]:false}},{sports_content:1}).state,'visible');
+  }
+  assert.equal(policyDecision(swim,{...settings,globalRules:{...settings.globalRules,sports:false}},{sports_content:1}).state,'visible');
 });

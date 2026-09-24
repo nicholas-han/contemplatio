@@ -16,7 +16,7 @@ export interface WeiboPost {
   contextCompleteness: 'complete' | 'unknown';
   elementFingerprint: string;
 }
-export const DECISIONS = ['sports_content', 'substantive_text', 'social_interaction', 'new_substantive_information', 'life_philosophy', 'poetry_or_sentiment', 'concrete_business_economic_information', 'investment_philosophy'] as const;
+export const DECISIONS = ['sports_content', 'substantive_text', 'social_interaction', 'new_substantive_information', 'interaction_evidence_sufficient', 'life_philosophy', 'poetry_or_sentiment', 'concrete_business_economic_information', 'investment_philosophy', 'noise_evidence_sufficient'] as const;
 export type DecisionKey = typeof DECISIONS[number];
 export interface Decision {
   state: DisplayState;

@@ -50,7 +50,16 @@ function extractKnownPost(card: Element): WeiboPost | null {
   const canonicalUrl = candidates[0]!.origin + candidates[0]!.pathname;
   const repost = card.querySelector(SELECTORS.repost);
   const textNode = original?.querySelector(SELECTORS.text);
-  const repostNode = repost?.querySelector(`${SELECTORS.repostText} ${SELECTORS.text}`);
+  const repostRegion = repost?.querySelector(SELECTORS.repostText);
+  const repostNode = repostRegion?.querySelector(SELECTORS.text);
+  // The source author is a sibling of the repost body, not part of its text node.
+  // Only use the visible profile link in this region; exclude inline mentions.
+  const repostAuthor = [...(repostRegion?.querySelectorAll<HTMLAnchorElement>('a[usercard][href]')??[])].find(a=>{
+    if(a.closest(SELECTORS.text))return false;
+    try{const u=new URL(a.getAttribute('href')!,'https://weibo.com');return u.origin==='https://weibo.com'&&/^\/(?:u\/\d+|n\/[^/]+)\/?$/.test(u.pathname);}catch{return false;}
+  });
+  const repostAuthorName = repostAuthor?textOf(repostAuthor):'';
+  const visibleContext = repostAuthorName?`转发作者：${repostAuthorName}`:'';
   const photoNodes=[...card.querySelectorAll<HTMLImageElement>('.picture img, img.woo-picture-img')];
   const imageUrls=[...new Set(photoNodes.map(img=>img.currentSrc||img.getAttribute('src')||'').filter(validImageUrl))];
   // Weibo renders an empty original container for reposts without an added comment.
@@ -71,11 +80,11 @@ function extractKnownPost(card: Element): WeiboPost | null {
   const postType = repost ? 'repost' : /^回复\s*@[^:：]+[:：]/u.test(text) ? 'reply' : 'original';
   const post: WeiboPost = { postId: candidates[0]!.pathname.split('/')[2]!, authorId,
     authorName: author.getAttribute('aria-label') || textOf(header.querySelector('a[usercard]') ?? author),
-    text, repostText, visibleContext: '', canonicalUrl, postType, hasMedia, hasLinkCard,
+    text, repostText, visibleContext, canonicalUrl, postType, hasMedia, hasLinkCard,
     isTextTruncated, contextCompleteness, imageUrls,
     imagesComplete:photoNodes.length>0&&photoNodes.every(img=>validImageUrl(img.currentSrc||img.getAttribute('src')||''))&&!/查看全部\s*\d+\s*张|\+\s*\d+/.test(photoNodes.map(img=>img.parentElement?.textContent??'').join('')),
     hasVideo:Boolean(card.querySelector('video,audio,.woo-font--play')),elementFingerprint: '' };
-  post.elementFingerprint = JSON.stringify([post.postId, authorId, text, repostText, postType, hasMedia, hasLinkCard, isTextTruncated, contextCompleteness,imageUrls,post.imagesComplete,post.hasVideo]);
+  post.elementFingerprint = JSON.stringify([post.postId, authorId, text, repostText, visibleContext, postType, hasMedia, hasLinkCard, isTextTruncated, contextCompleteness,imageUrls,post.imagesComplete,post.hasVideo]);
   return post;
 }
 

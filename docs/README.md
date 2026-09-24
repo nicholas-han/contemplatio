@@ -5,7 +5,7 @@
 | 工程 | 需求 | 架构 | 操作 |
 | --- | --- | --- | --- |
 | 公司研究 v0.1 | [公司信息框架](requirements/company-research.md)、[研究系统](requirements/research-system.md) | [中文](architecture/v0.1.zh.md)、[English](architecture/v0.1.md) | [开发与操作](guides/operations.md) |
-| 微博扩展 0.3.3 | [PRD v0.2 与已确认补充](requirements/PRD_Weibo_Semantic_Filter_Chrome_Extension_MVP_v0.2.md) | [扩展架构](architecture/weibo-semantic-filter-mvp.md) | [安装、规则、反馈与更新](guides/weibo-extension.md) |
+| 微博扩展 0.3.5 | [PRD v0.2 与已确认补充](requirements/PRD_Weibo_Semantic_Filter_Chrome_Extension_MVP_v0.2.md) | [扩展架构](architecture/weibo-semantic-filter-mvp.md) | [安装、规则、反馈与更新](guides/weibo-extension.md) |
 
 其他入口：
 

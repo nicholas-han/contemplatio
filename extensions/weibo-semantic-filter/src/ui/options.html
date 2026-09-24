@@ -10,14 +10,14 @@
 <label><input id="semanticEnabled" type="checkbox"> 启用语义判断，允许将候选微博的可见文字发送给上面的模型服务</label><p class="muted">不发送 Cookie、登录态或完整网页。首次使用及更换服务域名时，Chrome 会询问该域名的访问权限。未启用时仍可使用本地规则。</p>
 <button id="test" type="button">测试已保存的连接</button><p id="connection-status" role="status" aria-live="polite"></p><p class="muted">连接测试仅发送固定示例文字。<a href="https://console.typesafe.ai/" target="_blank" rel="noreferrer">获取 TypeSafe API key</a></p></section>
 <section class="panel"><h2>四个账号的通用规则</h2>
-<label><input id="namedPeople" type="checkbox"> 折叠涉及林园、董宝珍的微博（正文或转发原文明确提到姓名）</label>
+<label><input id="namedPeople" type="checkbox"> 折叠涉及林园、董宝珍的微博（正文、转发原文或转发作者昵称明确提到姓名）</label>
 <label><input id="sports" type="checkbox"> 过滤体育内容（篮球、足球、高尔夫等）</label>
 <label><input id="sceneryPhotos" type="checkbox"> 过滤纯风景照片且没有实质文字的微博</label>
 <label><input id="visionEnabled" type="checkbox"> 启用图片识别：允许将候选微博的配图链接及文字发送给 Vercel 看图模型</label>
-<p class="muted">图片识别使用同一 Vercel key，另计模型用量。先判断文字，仅对无实质文字的配图调用看图模型。图表、文字截图、混合内容或看不清的图片保留；一次最多完整判断 9 张图片，更多图片暂保留。不识别视频画面。</p>
-<p class="muted">通用规则适用于全部四个账号，优先于下方账号规则。未启用图片识别时，无法凭无字配图判断风景或高尔夫。</p></section>
+<p class="muted">图片识别使用同一 Vercel key，另计模型用量。文字未明确命中时，可继续检查配图是否属于体育；有文字或部分内容缺失不直接跳过。纯风景规则还须确认所有配图只是风景、没有实质文字信息；一次最多检查 9 张图片。不识别视频画面。</p>
+<p class="muted">通用规则适用于全部四个账号，优先于下方账号规则。全部规则都依据已显示的证据判断，不因正文未展开而直接保留。未启用图片识别时，无法凭无字配图判断风景或高尔夫。</p></section>
 <section class="panel"><h2>账号规则</h2><div id="accounts"></div><label>明确互动短词（每行一个）<textarea id="acknowledgements"></textarea></label>
-<details><summary>高级阈值</summary><p class="muted">分数为 0–1。规则冲突、媒体信息不足或正文未完整显示时优先保留。价值投资保护优先于灰化和折叠。</p><div id="thresholds" class="grid"></div><button type="button" id="defaults">恢复默认阈值和词表</button></details></section>
+<details><summary>高级阈值</summary><p class="muted">分数为 0–1。先逐条检查适用规则，证据足够就执行；未展开或带附件不直接跳过。没有明确命中、证据不足或服务不可用时保留。价值投资保护只适用于王文的哲理／诗词规则。</p><div id="thresholds" class="grid"></div><button type="button" id="defaults">恢复默认阈值和词表</button></details></section>
 <section class="panel"><h2>本地记录</h2><label><input id="collectSamples" type="checkbox"> 保存目标账号的可见原文，用于个人评估</label><p class="muted">默认只保存纠错标签、内容哈希和判断信息。开启后原文保存在本机，可导出人工标注；不会自动训练模型或更改规则。未保存的原文无法在离页后恢复。</p>
 <div class="row"><button type="button" id="export">导出反馈与样本</button><button type="button" id="clearCache">清除分类缓存</button><button type="button" id="clearFeedback">删除全部本地反馈</button></div><p id="stats" class="muted"></p></section>
 <div class="row"><button class="primary" type="submit">保存设置</button><span id="status" role="status" aria-live="polite"></span></div></form>
